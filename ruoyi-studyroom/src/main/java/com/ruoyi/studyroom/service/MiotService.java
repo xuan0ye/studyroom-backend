@@ -1,29 +1,18 @@
 package com.ruoyi.studyroom.service;
 
 import cn.hutool.core.util.ObjectUtil;
-import cn.hutool.http.HttpUtil;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ruoyi.studyroom.domain.bo.SeatDeviceBo;
 import com.ruoyi.studyroom.domain.vo.SeatDeviceVo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * @ProjectName: study-room-vue
- * @Author: AI Generated
- * @Date: 2026-05-18
- * @Desc: 米家IoT设备控制服务
- * 支持三种通信协议:
- *   - MQTT: 通过本地MQTT Broker桥接控制设备
- *   - HTTP: 通过Home Assistant REST API控制设备
- *   - MIOT_API: 通过小米IoT平台API控制设备(需开发者账号)
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -31,210 +20,162 @@ public class MiotService {
 
     private final ISeatDeviceService seatDeviceService;
 
-    /** 本地Home Assistant地址 */
-    @Value("${miot.home-assistant.url:http://localhost:8123}")
-    private String haUrl;
+    /** 米家桥接脚本路径, 可配置(默认本机开发路径; 服务器部署时通过配置覆盖) */
+    @Value("${studyroom.miot.bridge-script:G:\\1自习室小程序\\tools\\miot_bridge.py}")
+    private String bridgeScript;
 
-    /** Home Assistant Long-Lived Access Token */
-    @Value("${miot.home-assistant.token:}")
-    private String haToken;
+    /** 调用桥接脚本的 Python 可执行文件(默认 python, 服务器可用绝对路径) */
+    @Value("${studyroom.miot.python:python}")
+    private String pythonExec;
 
-    /** MQTT Broker地址 */
-    @Value("${miot.mqtt.broker:tcp://localhost:1883}")
-    private String mqttBroker;
-
-    /** 小米IoT平台API地址 */
-    @Value("${miot.api.url:https://api.home.mi.com}")
-    private String miotApiUrl;
-
-    /** 小米IoT平台AppID (与小程序appid不同) */
-    @Value("${miot.api.app-id:}")
-    private String miotAppId;
-
-    /** 小米IoT平台AppKey */
-    @Value("${miot.api.app-key:}")
-    private String miotAppKey;
-
-    private final ObjectMapper objectMapper = new ObjectMapper();
-
-    /**
-     * 打开座位设备 (预约时调用)
-     * @param seatId 座位ID
-     * @return 操作结果
-     */
     public Map<String, Object> turnOnSeatDevices(Long seatId) {
         Map<String, Object> result = new HashMap<>();
         List<SeatDeviceVo> devices = seatDeviceService.queryBySeatId(seatId);
-
         if (devices.isEmpty()) {
             result.put("success", false);
-            result.put("msg", "该座位未绑定IoT设备");
+            result.put("msg", "该座位未绑定开关设备");
             return result;
         }
-
+        int controlled = 0;
+        int sent = 0;
         for (SeatDeviceVo device : devices) {
             if (device.getAutoControl() != null && device.getAutoControl() == 1) {
+                controlled++;
                 boolean ok = sendCommand(device, true);
                 result.put(device.getDeviceName(), ok);
                 if (ok) {
-                    updateDeviceStatus(device.getDeviceId(), 2); // 已开
+                    sent++;
+                    updateDeviceStatus(device.getDeviceId(), 2);
                 }
             }
         }
-        result.put("success", true);
+        fillSuccess(result, controlled, sent, "开灯");
         return result;
     }
 
-    /**
-     * 关闭座位设备 (预约结束/取消时调用)
-     * @param seatId 座位ID
-     * @return 操作结果
-     */
     public Map<String, Object> turnOffSeatDevices(Long seatId) {
         Map<String, Object> result = new HashMap<>();
         List<SeatDeviceVo> devices = seatDeviceService.queryBySeatId(seatId);
-
         if (devices.isEmpty()) {
             result.put("success", false);
-            result.put("msg", "该座位未绑定IoT设备");
+            result.put("msg", "该座位未绑定开关设备");
             return result;
         }
-
+        int controlled = 0;
+        int sent = 0;
         for (SeatDeviceVo device : devices) {
             if (device.getAutoControl() != null && device.getAutoControl() == 1) {
+                controlled++;
                 boolean ok = sendCommand(device, false);
                 result.put(device.getDeviceName(), ok);
                 if (ok) {
-                    updateDeviceStatus(device.getDeviceId(), 3); // 已关
+                    sent++;
+                    updateDeviceStatus(device.getDeviceId(), 3);
                 }
             }
         }
-        result.put("success", true);
+        fillSuccess(result, controlled, sent, "关灯");
         return result;
     }
 
     /**
-     * 控制单个设备
+     * 如实写入 success: 只有确实向设备下发成功才算成功。
+     * 历史实现无论设备下发成功与否都返回 success=true，前端会误报"灯已开启"。
      */
+    private void fillSuccess(Map<String, Object> result, int controlled, int sent, String action) {
+        if (controlled == 0) {
+            result.put("success", false);
+            result.put("msg", "该座位设备未开启自动控制");
+        } else if (sent == 0) {
+            result.put("success", false);
+            result.put("msg", action + "指令下发失败，请稍后重试");
+        } else {
+            result.put("success", true);
+        }
+    }
+
     public Map<String, Object> controlDevice(Long deviceId, boolean turnOn) {
         Map<String, Object> result = new HashMap<>();
         SeatDeviceVo device = seatDeviceService.queryById(deviceId);
+        if (ObjectUtil.isNull(device)) {
+            result.put("success", false);
+            result.put("msg", "Device not found");
+            return result;
+        }
+        boolean ok = sendCommand(device, turnOn);
+        result.put("success", ok);
+        result.put("deviceName", device.getDeviceName());
+        result.put("status", turnOn ? "on" : "off");
+        if (ok) updateDeviceStatus(deviceId, turnOn ? 2 : 3);
+        return result;
+    }
 
+    /**
+     * 只读查询设备当前开关状态(后台「灯控自检」用, 不改变设备)
+     */
+    public Map<String, Object> queryDeviceStatus(Long deviceId) {
+        Map<String, Object> result = new HashMap<>();
+        SeatDeviceVo device = seatDeviceService.queryById(deviceId);
         if (ObjectUtil.isNull(device)) {
             result.put("success", false);
             result.put("msg", "设备不存在");
             return result;
         }
-
-        boolean ok = sendCommand(device, turnOn);
-        result.put("success", ok);
-        result.put("deviceName", device.getDeviceName());
-        result.put("status", turnOn ? "已开" : "已关");
-
-        if (ok) {
-            updateDeviceStatus(deviceId, turnOn ? 2 : 3);
+        try {
+            ProcessBuilder pb = new ProcessBuilder(pythonExec, bridgeScript, device.getDeviceUid(), "status");
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            StringBuilder out = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) out.append(line);
+            p.waitFor();
+            String resp = out.toString();
+            log.info("MIoT status: did={}, resp={}", device.getDeviceUid(), resp);
+            boolean ok = resp.contains("\"success\": true") || resp.contains("\"success\":true");
+            result.put("success", ok);
+            result.put("raw", resp);
+            result.put("deviceName", device.getDeviceName());
+            result.put("deviceUid", device.getDeviceUid());
+            result.put("power", resp.contains("\"power\": true") || resp.contains("\"power\":true"));
+            if (!ok) {
+                result.put("msg", resp);
+            }
+        } catch (Exception e) {
+            log.error("MIoT status failed: {}", e.getMessage());
+            result.put("success", false);
+            result.put("msg", e.getMessage());
         }
         return result;
     }
 
-    /**
-     * 发送设备控制指令
-     */
     private boolean sendCommand(SeatDeviceVo device, boolean turnOn) {
-        String protocol = device.getProtocol();
-        String payload = turnOn ? device.getOnPayload() : device.getOffPayload();
-
         try {
-            switch (protocol.toUpperCase()) {
-                case "HTTP":
-                case "HA_API":
-                    return sendHomeAssistantCommand(device.getDeviceUid(), turnOn);
-                case "MQTT":
-                    return sendMqttCommand(device.getMqttTopic(), payload);
-                case "MIOT_API":
-                    return sendMiotApiCommand(device.getDeviceUid(), turnOn);
-                default:
-                    log.warn("不支持的协议: {}", protocol);
-                    return false;
-            }
+            String action = turnOn ? "on" : "off";
+            ProcessBuilder pb = new ProcessBuilder(pythonExec, bridgeScript, device.getDeviceUid(), action);
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            StringBuilder out = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) out.append(line);
+            p.waitFor();
+            String resp = out.toString();
+            log.info("MIoT result: did={}, action={}, resp={}", device.getDeviceUid(), action, resp);
+            return resp.contains("\"success\": true") || resp.contains("\"success\":true");
         } catch (Exception e) {
-            log.error("设备控制失败: device={}, turnOn={}", device.getDeviceName(), turnOn, e);
+            log.error("MIoT failed: {}", e.getMessage());
             return false;
         }
     }
 
-    /**
-     * 通过Home Assistant REST API控制设备
-     */
-    private boolean sendHomeAssistantCommand(String entityId, boolean turnOn) {
-        try {
-            String url = haUrl + "/api/services/switch/" + (turnOn ? "turn_on" : "turn_off");
-            Map<String, Object> body = new HashMap<>();
-            body.put("entity_id", entityId);
-
-            String json = objectMapper.writeValueAsString(body);
-            String response = HttpUtil.createPost(url)
-                .header("Authorization", "Bearer " + haToken)
-                .header("Content-Type", "application/json")
-                .body(json)
-                .execute()
-                .body();
-
-            log.info("HA {} result: entity={}, response={}", turnOn ? "turn_on" : "turn_off", entityId, response);
-            return true;
-        } catch (Exception e) {
-            log.error("Home Assistant调用失败: {}", e.getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * 通过MQTT发送控制指令
-     * 注: 需要全局MQTT客户端(推荐Spring Integration MQTT或Eclipse Paho)
-     */
-    private boolean sendMqttCommand(String topic, String payload) {
-        try {
-            // MQTT发布 - 需要MQTT客户端实例
-            // mqttClient.publish(topic, payload.getBytes(), 1, false);
-            log.info("MQTT发送: topic={}, payload={}", topic, payload);
-            return true;
-        } catch (Exception e) {
-            log.error("MQTT发送失败: {}", e.getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * 通过小米IoT平台API控制设备
-     * 注: 需要小米IoT开发者平台注册并获取appId/appKey
-     */
-    private boolean sendMiotApiCommand(String deviceUid, boolean turnOn) {
-        try {
-            if (miotAppId.isEmpty() || miotAppKey.isEmpty()) {
-                log.warn("小米IoT API未配置(appId/appKey为空), 跳过云端控制");
-                return false;
-            }
-            // 调用小米IoT API
-            // POST {miotApiUrl}/v2/device/control
-            // Authorization: Bearer {access_token}
-            log.info("MIoT_API 控制: device={}, action={}", deviceUid, turnOn ? "on" : "off");
-            return true;
-        } catch (Exception e) {
-            log.error("小米IoT API调用失败: {}", e.getMessage());
-            return false;
-        }
-    }
-
-    private void updateDeviceStatus(Long deviceId, Integer status) {
+    private void updateDeviceStatus(Long id, Integer status) {
         SeatDeviceBo bo = new SeatDeviceBo();
-        bo.setDeviceId(deviceId);
+        bo.setDeviceId(id);
         bo.setStatus(status);
         seatDeviceService.updateByBo(bo);
     }
 
-    /**
-     * 获取房间所有设备状态
-     */
     public List<SeatDeviceVo> getRoomDevices(Long roomId) {
         return seatDeviceService.queryByRoomId(roomId);
     }

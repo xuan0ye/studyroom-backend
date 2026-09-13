@@ -14,5 +14,18 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         <result property="updateTime" column="update_time"/>
     </resultMap>
 
+    <!-- 原子扣减: UPDATE + 余额充足条件, 返回影响行数(0=余额不足, 不做任何修改) -->
+    <update id="deductBalance">
+        UPDATE sr_balance
+        SET balance = balance - #{points}, update_time = NOW()
+        WHERE user_id = #{userId} AND balance >= #{points}
+    </update>
+
+    <!-- 原子增加(充值入账): 行内自增, 防并发丢失更新 -->
+    <update id="addBalance">
+        UPDATE sr_balance
+        SET balance = balance + #{points}, update_time = NOW()
+        WHERE user_id = #{userId}
+    </update>
 
 </mapper>

@@ -41,6 +41,31 @@ public class CardUser extends BaseEntity {
      */
     private Date expiryTime;
 
+    /**
+     * 锁定座位ID(周卡/月卡预约后自动锁定)
+     */
+    private Long lockSeatId;
+
+    /**
+     * 锁座开始时间
+     */
+    private Date lockStartTime;
+
+    /**
+     * 锁座结束时间
+     */
+    private Date lockEndTime;
+
+    /**
+     * 已请假次数(月卡最多2次)
+     */
+    private Integer leaveCount;
+
+    /**
+     * 长期卡剩余可用天数(停卡冻结/续启结算, 默认=卡term)
+     */
+    private Integer remainingDays;
+
     @TableField(exist = false)
     private Card card;
 }

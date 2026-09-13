@@ -7,7 +7,9 @@ import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.core.domain.PageQuery;
 
 import java.util.Collection;
+import java.time.LocalDate;
 import java.util.List;
+
 
 /**
  * 订单Service接口
@@ -72,4 +74,23 @@ public interface IOrderService {
      * @return
      */
     Boolean updateByBoAndRank(OrderBo orderBo) throws Exception;
+
+    /**
+     * 批量过期指定日期前的订单
+     *
+     * @param date 过期日期
+     */
+    void expireDailyOrders(LocalDate date);
+
+    /**
+     * 查询用户今日订单
+     *
+     * @param userId 会员ID
+     * @param date 日期
+     * @return 订单列表
+     */
+    List<OrderVo> getTodayOrders(Long userId, LocalDate date);
 }
+
+
+

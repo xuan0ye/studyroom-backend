@@ -25,7 +25,13 @@ public class WxPayConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public WxPayService wxService() {
-        WxPayConfig payConfig = new WxPayConfig();
+        String publicKeyId = StringUtils.trimToNull(this.properties.getPublicKeyId());
+        String publicKeyPath = StringUtils.trimToNull(this.properties.getPublicKeyPath());
+        // 微信支付公钥模式（新入驻商户）：使用公钥ID与公钥文件验签，避免 AutoUpdateCertificatesVerifier 强制下载平台证书
+        boolean publicKeyMode = publicKeyId != null && publicKeyPath != null;
+        WxPayConfig payConfig = publicKeyMode
+            ? new WxPayPublicKeyConfig(publicKeyId, publicKeyPath)
+            : new WxPayConfig();
         payConfig.setAppId(StringUtils.trimToNull(this.properties.getAppId()));
         payConfig.setMchId(StringUtils.trimToNull(this.properties.getMchId()));
         payConfig.setMchKey(StringUtils.trimToNull(this.properties.getMchKey()));

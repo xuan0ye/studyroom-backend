@@ -37,6 +37,21 @@ public class OrderRechargeServiceImpl implements IOrderRechargeService {
 
     private final OrderRechargeMapper baseMapper;
     private final IBalanceService balanceService;
+    private final com.ruoyi.studyroom.mapper.UserMapper userMapper;
+
+    /**
+     * 补全关联展示字段(用户昵称/手机号)
+     */
+    private void fillDisplayFields(OrderRechargeVo vo) {
+        if (vo == null || vo.getUserId() == null) {
+            return;
+        }
+        com.ruoyi.studyroom.domain.User user = userMapper.selectById(vo.getUserId());
+        if (user != null) {
+            vo.setUserNickname(user.getNickname());
+            vo.setUserPhone(user.getPhone());
+        }
+    }
 
     /**
      * 查询充值订单
@@ -59,6 +74,9 @@ public class OrderRechargeServiceImpl implements IOrderRechargeService {
     public TableDataInfo<OrderRechargeVo> queryPageList(OrderRechargeBo bo, PageQuery pageQuery) {
         LambdaQueryWrapper<OrderRecharge> lqw = buildQueryWrapper(bo);
         Page<OrderRechargeVo> result = baseMapper.selectVoPage(pageQuery.build(), lqw);
+        if (result.getRecords() != null) {
+            result.getRecords().forEach(this::fillDisplayFields);
+        }
         return TableDataInfo.build(result);
     }
 
@@ -71,7 +89,11 @@ public class OrderRechargeServiceImpl implements IOrderRechargeService {
     @Override
     public List<OrderRechargeVo> queryList(OrderRechargeBo bo) {
         LambdaQueryWrapper<OrderRecharge> lqw = buildQueryWrapper(bo);
-        return baseMapper.selectVoList(lqw);
+        List<OrderRechargeVo> list = baseMapper.selectVoList(lqw);
+        if (list != null) {
+            list.forEach(this::fillDisplayFields);
+        }
+        return list;
     }
 
     private LambdaQueryWrapper<OrderRecharge> buildQueryWrapper(OrderRechargeBo bo) {
@@ -134,12 +156,25 @@ public class OrderRechargeServiceImpl implements IOrderRechargeService {
     @Transactional(rollbackFor = Exception.class)
     @Override
     public boolean updateByBoAndBalance(OrderRechargeBo bo) {
-        bo.setUserId(bo.getUserId());
-        BalanceVo balanceVo = balanceService.queryByUserId(bo.getUserId());
-        BalanceBo balanceBo = BeanUtil.toBean(balanceVo, BalanceBo.class);
-        balanceBo.setBalance(Math.toIntExact(balanceVo.getBalance() + bo.getRechargeTotal()));
-        balanceService.updateByBo(balanceBo);
-        return updateByBo(bo);
+        if (bo.getOrderId() == null || bo.getUserId() == null) {
+            return false;
+        }
+        // 幂等闸门: 仅当订单从未支付(UNPAID=0)时置为已支付并入账;
+        // 重复回调/轮询/并发已处理过则直接返回成功, 杜绝重复入账
+        int rows = baseMapper.update(null, Wrappers.<OrderRecharge>lambdaUpdate()
+            .eq(OrderRecharge::getOrderId, bo.getOrderId())
+            .eq(OrderRecharge::getPayStatus, PayConstants.UNPAID)
+            .set(OrderRecharge::getPayStatus, PayConstants.PAID));
+        if (rows <= 0) {
+            OrderRechargeVo exist = queryByOrderId(bo.getOrderId());
+            return exist != null && PayConstants.PAID.equals(exist.getPayStatus());
+        }
+        // 首次入账: 原子增加余额(到账点数以创建订单时服务端计算的 rechargeTotal 为准)
+        int points = bo.getRechargeTotal() == null ? 0 : bo.getRechargeTotal();
+        if (points > 0) {
+            balanceService.add(bo.getUserId(), points);
+        }
+        return true;
     }
 
     /**

@@ -61,4 +61,10 @@ public class SeatVo {
     @ApiModelProperty("座位是否可预定")
     private Boolean status;
 
+    /**
+     * 占用者头像(URL或Base64), 仅已占座位(status=false)有值
+     */
+    @ApiModelProperty("占用者头像")
+    private String occupantAvatar;
+
 }

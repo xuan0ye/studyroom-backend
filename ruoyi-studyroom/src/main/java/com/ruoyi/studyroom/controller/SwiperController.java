@@ -119,6 +119,25 @@ public class SwiperController extends BaseController {
         response.reset();
         FileUtils.setAttachmentResponseHeader(response, swiperVo.getOriginalName());
         response.setContentType(MediaType.APPLICATION_OCTET_STREAM_VALUE + "; charset=UTF-8");
+        // 本地存储: 直接读本地文件
+        if (swiperVo.getUrl() != null && swiperVo.getUrl().startsWith("/upload/")) {
+            String fileName = swiperVo.getUrl().substring("/upload/".length());
+            File localFile = new File(System.getProperty("user.dir") + File.separator + "upload" + File.separator + fileName);
+            if (!localFile.exists()) {
+                throw new ServiceException("文件不存在或已被删除");
+            }
+            try (java.io.InputStream in = new java.io.FileInputStream(localFile);
+                 java.io.OutputStream out = response.getOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int len;
+                while ((len = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, len);
+                }
+                out.flush();
+            }
+            return;
+        }
+        // 远端存储(兼容旧数据)
         long data;
         try {
             data = HttpUtil.download(swiperVo.getUrl(), response.getOutputStream(), false);

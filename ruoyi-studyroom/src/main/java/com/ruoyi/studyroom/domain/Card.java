@@ -52,4 +52,19 @@ public class Card extends BaseEntity {
      */
     private Integer status;
 
+    /**
+     * 区域限制: 0=不限区域 1=仅沉浸区(16-19号) 2=禁止沉浸区(16-19号)
+     */
+    private Integer cardType;
+
+    /**
+     * 每日最长可用小时(预留)
+     */
+    private Integer maxDailyHours;
+
+    /**
+     * 套餐人数: 1=单人 2=双人(购买后额外生成 1 个好友兑换码)
+     */
+    private Integer partySize;
+
 }

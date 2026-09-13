@@ -76,5 +76,16 @@ public class CardVo {
     @ApiModelProperty("状态")
     private Integer status;
 
+    /**
+     * 区域限制: 0=不限区域 1=仅沉浸区(16-19号) 2=禁止沉浸区(16-19号)
+     */
+    @ApiModelProperty("区域限制")
+    private Integer cardType;
+
+    /**
+     * 套餐人数: 1=单人 2=双人(购买后额外生成 1 个好友兑换码)
+     */
+    @ApiModelProperty("套餐人数")
+    private Integer partySize;
 
 }

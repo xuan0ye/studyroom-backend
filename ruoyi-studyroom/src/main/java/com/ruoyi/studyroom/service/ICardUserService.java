@@ -67,4 +67,11 @@ public interface ICardUserService {
     Boolean deleteWithValidByIds(Collection<Long> ids, Boolean isValid);
 
     List<CardUserVo> queryListByUserId(Long userId);
+
+    /**
+     * 清空卡的锁座信息(周卡/月卡取消预约或请假时释放锁座)
+     *
+     * @param cardUserId 卡用户ID
+     */
+    void clearLockSeat(Long cardUserId);
 }

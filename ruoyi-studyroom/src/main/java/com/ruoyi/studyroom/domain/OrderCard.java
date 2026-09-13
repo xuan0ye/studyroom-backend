@@ -51,5 +51,21 @@ public class OrderCard extends BaseEntity {
      * 付款状态
      */
     private Integer payStatus;
+    /**
+     * 余额抵扣金额(点)
+     */
+    private BigDecimal balanceAmount;
+    /**
+     * 积分抵扣金额
+     */
+    private BigDecimal pointsAmount;
+    /**
+     * 消耗积分
+     */
+    private Integer pointsCost;
+    /**
+     * 微信实付金额
+     */
+    private BigDecimal cashAmount;
 
 }

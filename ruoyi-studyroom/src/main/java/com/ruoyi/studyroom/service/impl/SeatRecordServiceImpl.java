@@ -4,6 +4,7 @@ import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.date.DateTime;
 import cn.hutool.core.date.DateUtil;
 import com.ruoyi.common.utils.StringUtils;
+import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.core.domain.PageQuery;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -14,7 +15,13 @@ import org.springframework.stereotype.Service;
 import com.ruoyi.studyroom.domain.bo.SeatRecordBo;
 import com.ruoyi.studyroom.domain.vo.SeatRecordVo;
 import com.ruoyi.studyroom.domain.SeatRecord;
+import com.ruoyi.studyroom.domain.User;
+import com.ruoyi.studyroom.domain.Seat;
+import com.ruoyi.studyroom.domain.Room;
 import com.ruoyi.studyroom.mapper.SeatRecordMapper;
+import com.ruoyi.studyroom.mapper.UserMapper;
+import com.ruoyi.studyroom.mapper.SeatMapper;
+import com.ruoyi.studyroom.mapper.RoomMapper;
 import com.ruoyi.studyroom.service.ISeatRecordService;
 
 import java.util.Date;
@@ -34,6 +41,38 @@ import java.util.function.Consumer;
 public class SeatRecordServiceImpl implements ISeatRecordService {
 
     private final SeatRecordMapper baseMapper;
+    private final UserMapper userMapper;
+    private final SeatMapper seatMapper;
+    private final RoomMapper roomMapper;
+
+    /**
+     * 补全关联展示字段(用户昵称/手机号, 座位号, 自习室名, 区域名)
+     */
+    private void fillDisplayFields(SeatRecordVo vo) {
+        if (vo == null) {
+            return;
+        }
+        if (vo.getUserId() != null) {
+            User user = userMapper.selectById(vo.getUserId());
+            if (user != null) {
+                vo.setUserName(user.getNickname());
+                vo.setUserPhone(user.getPhone());
+            }
+        }
+        if (vo.getSeatId() != null) {
+            Seat seat = seatMapper.selectById(vo.getSeatId());
+            if (seat != null) {
+                vo.setSeatNum(seat.getSeatNum());
+                vo.setAreaName(seat.getAreaName());
+            }
+        }
+        if (vo.getRoomId() != null) {
+            Room room = roomMapper.selectById(vo.getRoomId());
+            if (room != null) {
+                vo.setRoomName(room.getRoomName());
+            }
+        }
+    }
 
     /**
      * 查询座位-记录
@@ -56,6 +95,9 @@ public class SeatRecordServiceImpl implements ISeatRecordService {
     public TableDataInfo<SeatRecordVo> queryPageList(SeatRecordBo bo, PageQuery pageQuery) {
         LambdaQueryWrapper<SeatRecord> lqw = buildQueryWrapper(bo);
         Page<SeatRecordVo> result = baseMapper.selectVoPage(pageQuery.build(), lqw);
+        if (result.getRecords() != null) {
+            result.getRecords().forEach(this::fillDisplayFields);
+        }
         return TableDataInfo.build(result);
     }
 
@@ -68,7 +110,11 @@ public class SeatRecordServiceImpl implements ISeatRecordService {
     @Override
     public List<SeatRecordVo> queryList(SeatRecordBo bo) {
         LambdaQueryWrapper<SeatRecord> lqw = buildQueryWrapper(bo);
-        return baseMapper.selectVoList(lqw);
+        List<SeatRecordVo> list = baseMapper.selectVoList(lqw);
+        if (list != null) {
+            list.forEach(this::fillDisplayFields);
+        }
+        return list;
     }
 
     private LambdaQueryWrapper<SeatRecord> buildQueryWrapper(SeatRecordBo bo) {
@@ -143,14 +189,16 @@ public class SeatRecordServiceImpl implements ISeatRecordService {
      */
     @Override
     public List<SeatRecordVo> queryListByTime(SeatRecordBo bo) {
-        DateTime end = DateUtil.endOfDay(bo.getStartTime());
+        if (bo.getStartTime() == null || bo.getEndTime() == null) {
+            throw new ServiceException("开始/结束时间不能为空");
+        }
         LambdaQueryWrapper<SeatRecord> lqw = Wrappers.lambdaQuery();
-        lqw.eq(SeatRecord::getRoomId, bo.getRoomId());
-        lqw.and(time-> {
-            time.between(SeatRecord::getStartTime, bo.getStartTime(), end)
-                    .or()
-                    .between(SeatRecord::getEndTime, bo.getStartTime(), end);
-        });
+                if (bo.getRoomId() != null) {
+            lqw.eq(SeatRecord::getRoomId, bo.getRoomId());
+        }
+        // 标准区间重叠判断: 记录开始时间 < 查询结束时间 且 记录结束时间 > 查询开始时间
+        lqw.lt(SeatRecord::getStartTime, bo.getEndTime())
+            .gt(SeatRecord::getEndTime, bo.getStartTime());
         return baseMapper.selectVoList(lqw);
     }
 }

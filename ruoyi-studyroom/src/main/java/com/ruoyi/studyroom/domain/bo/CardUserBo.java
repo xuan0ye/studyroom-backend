@@ -57,4 +57,33 @@ public class CardUserBo extends BaseEntity {
     @DateTimeFormat(pattern="yyyy-MM-dd HH:mm:ss")
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private Date expiryTime;
+
+    /**
+     * 锁定座位ID(周卡/月卡)
+     */
+    private Long lockSeatId;
+
+    /**
+     * 锁座开始时间
+     */
+    @DateTimeFormat(pattern="yyyy-MM-dd HH:mm:ss")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private Date lockStartTime;
+
+    /**
+     * 锁座结束时间
+     */
+    @DateTimeFormat(pattern="yyyy-MM-dd HH:mm:ss")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private Date lockEndTime;
+
+    /**
+     * 已请假次数(月卡最多2次)
+     */
+    private Integer leaveCount;
+
+    /**
+     * 长期卡剩余可用天数
+     */
+    private Integer remainingDays;
 }

@@ -1,6 +1,7 @@
 package com.ruoyi.studyroom.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.util.IdUtil;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.common.core.page.TableDataInfo;
@@ -8,9 +9,6 @@ import com.ruoyi.common.core.domain.PageQuery;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.ruoyi.oss.entity.UploadResult;
-import com.ruoyi.oss.factory.OssFactory;
-import com.ruoyi.oss.service.IOssStrategy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import com.ruoyi.studyroom.domain.bo.SwiperBo;
@@ -20,6 +18,7 @@ import com.ruoyi.studyroom.mapper.SwiperMapper;
 import com.ruoyi.studyroom.service.ISwiperService;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -105,21 +104,32 @@ public class SwiperServiceImpl implements ISwiperService {
     @Override
     public Swiper upload(MultipartFile file) {
         String originalfileName = file.getOriginalFilename();
-        String suffix = StringUtils.substring(originalfileName, originalfileName.lastIndexOf("."), originalfileName.length());
-        IOssStrategy storage = OssFactory.instance();
-        UploadResult uploadResult;
-        try {
-            uploadResult = storage.uploadSuffix(file.getBytes(), suffix, file.getContentType());
-        } catch (IOException e) {
-            throw new ServiceException(e.getMessage());
+        if (originalfileName == null) {
+            throw new ServiceException("文件名不能为空");
         }
+        int dotIdx = originalfileName.lastIndexOf(".");
+        String suffix = dotIdx >= 0 ? originalfileName.substring(dotIdx) : "";
+        // 本地存储: 保存到 ruoyi-admin 运行目录/upload/swiper/, 通过 /upload/** 静态映射访问
+        String dir = System.getProperty("user.dir") + File.separator + "upload" + File.separator + "swiper";
+        File dirFile = new File(dir);
+        if (!dirFile.exists() && !dirFile.mkdirs()) {
+            throw new ServiceException("创建上传目录失败");
+        }
+        String fileName = System.currentTimeMillis() + "_" + IdUtil.fastSimpleUUID() + suffix;
+        File target = new File(dirFile, fileName);
+        try {
+            file.transferTo(target);
+        } catch (IOException e) {
+            throw new ServiceException("文件保存失败: " + e.getMessage());
+        }
+        String url = "/upload/swiper/" + fileName;
         // 保存文件信息
         Swiper oss = new Swiper();
-        oss.setUrl(uploadResult.getUrl());
+        oss.setUrl(url);
         oss.setFileSuffix(suffix);
-        oss.setFileName(uploadResult.getFilename());
+        oss.setFileName(fileName);
         oss.setOriginalName(originalfileName);
-        oss.setService(storage.getServiceType().getValue());
+        oss.setService("local");
         oss.setStatus(1);
         baseMapper.insert(oss);
         return oss;
@@ -160,8 +170,14 @@ public class SwiperServiceImpl implements ISwiperService {
         }
         List<Swiper> list = baseMapper.selectBatchIds(ids);
         for (Swiper swiper : list) {
-            IOssStrategy storage = OssFactory.instance(swiper.getService());
-            storage.delete(swiper.getUrl());
+            // 本地存储文件删除(仅删除本地 upload 目录下的文件)
+            if (swiper.getUrl() != null && swiper.getUrl().startsWith("/upload/")) {
+                String fileName = swiper.getUrl().substring("/upload/".length());
+                File f = new File(System.getProperty("user.dir") + File.separator + "upload" + File.separator + fileName);
+                if (f.exists()) {
+                    f.delete();
+                }
+            }
         }
         return baseMapper.deleteBatchIds(ids) > 0;
     }

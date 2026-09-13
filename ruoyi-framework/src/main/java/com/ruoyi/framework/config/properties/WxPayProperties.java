@@ -46,4 +46,15 @@ public class WxPayProperties {
 
 
 
+
+
+    /**
+     * 微信支付公钥ID（商户平台-账户中心-API安全-微信支付公钥）
+     */
+    private String publicKeyId;
+
+    /**
+     * 微信支付公钥文件路径（pub_key.pem），支持 classpath: 前缀
+     */
+    private String publicKeyPath;
 }

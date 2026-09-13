@@ -16,7 +16,7 @@ spring:
           driverClassName: com.mysql.cj.jdbc.Driver
           # jdbc 所有参数配置参考 https://lionli.blog.csdn.net/article/details/122018562
           # rewriteBatchedStatements=true 批处理优化 大幅提升批量插入更新删除性能(对数据库有性能损耗 使用批量操作应考虑性能问题)
-          url: jdbc:mysql://localhost:3306/wx-study-room?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8&autoReconnect=true&rewriteBatchedStatements=true
+          url: jdbc:mysql://localhost:3306/wx_study_room?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8&autoReconnect=true&rewriteBatchedStatements=true
           username: root
           password: 123456
         # 从库数据源
@@ -53,13 +53,11 @@ spring:
 --- # druid 配置
 spring.datasource.druid:
   webStatFilter:
-    enabled: true
+    enabled: false
   statViewServlet:
-    enabled: true
-    # 设置白名单，不填则允许所有访问
-    allow:
+    # 生产环境关闭 Druid 监控控制台(避免弱口令/信息暴露风险)
+    enabled: false
     url-pattern: /druid/*
-    # 控制台管理用户名和密码
     login-username: ruoyi
     login-password: 123456
   filter:
@@ -73,6 +71,10 @@ spring.datasource.druid:
       config:
         multi-statement-allow: true
 
+--- # swagger 生产关闭(接口文档不对外暴露)
+swagger:
+  enabled: false
+
 --- # redis 单机配置(单机与集群只能开启一个另一个需要注释掉)
 spring:
   redis:
@@ -82,8 +84,8 @@ spring:
     port: 6379
     # 数据库索引
     database: 0
-    # 密码
-    password:
+    # 密码(与服务器 /etc/redis/redis.conf requirepass 一致)
+    password: 869141149
     # 连接超时时间
     timeout: 10s
     # 是否开启ssl
@@ -102,9 +104,44 @@ redisson:
     connectionMinimumIdleSize: 32
     # 连接池大小
     connectionPoolSize: 64
-    # 连接空闲超时，单位：毫秒
+    # 连接空闲超时时间，单位：毫秒
     idleConnectionTimeout: 10000
-    # 命令等待超时，单位：毫秒
+    # 命令等待超时时间，单位：毫秒
     timeout: 3000
     # 发布和订阅连接池大小
     subscriptionConnectionPoolSize: 50
+
+--- # 微信小程序/支付 生产配置(密钥已填写)
+wx:
+  miniapp:
+    configs:
+      - appid: wx75ea31b8c4707d16
+        # 2026-09-06 实测有效(成功获取access_token); be478adff1806e332db6ecb01631d5c3 实测40125无效
+        secret: ${WX_MINIAPP_SECRET:bf6bff0de59ad7365f0c13e53e59a992}
+        msgDataFormat: JSON
+  pay:
+    appId: wx75ea31b8c4707d16
+    mchId: ${WX_PAY_MCH_ID:1115944767}
+    # APIv2 密钥, 已全部使用 APIv3 可留空
+    mchKey: ${WX_PAY_MCH_KEY:}
+    apiV3Key: ${WX_PAY_APIV3_KEY:DaYouSuoAn15803875080WuJiaHan123}
+    privateKeyPath: classpath:cert/apiclient_key.pem
+    privateCertPath: classpath:cert/apiclient_cert.pem
+    # 支付回调地址(线上 HTTPS 域名, 已配置 HTTPS 反代至 127.0.0.1:8081)
+    notifyUrl: https://api.dayousuoan.top/api/wx/pay/notify/order
+    publicKeyId: PUB_KEY_ID_0111159447672026081500111649000800
+    publicKeyPath: classpath:cert/pub_key.pem
+
+--- # 生产环境开关
+studyroom:
+  dev:
+    # 生产必须关闭 mock 登录!
+    mock-login: false
+  # 米家桥接脚本(生产部署路径, 可用环境变量 STUDYROOM_MIOT_SCRIPT / STUDYROOM_MIOT_PYTHON 覆盖)
+  miot:
+    bridge-script: ${STUDYROOM_MIOT_SCRIPT:/deploy/miot_bridge.py}
+    python: ${STUDYROOM_MIOT_PYTHON:/usr/bin/python3}
+  ai:
+    # msgSecCheck 内容安全(微信审核 AIGC 合规要求), 生产保持开启
+    content-security:
+      enabled: true

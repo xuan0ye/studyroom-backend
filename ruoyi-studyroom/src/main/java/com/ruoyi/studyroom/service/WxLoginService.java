@@ -22,6 +22,7 @@ import com.ruoyi.studyroom.domain.bo.UserBo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import me.chanjar.weixin.common.error.WxErrorException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.servlet.http.HttpServletRequest;
@@ -42,11 +43,27 @@ public class WxLoginService {
     private final LogininforService asyncService;
     final WxMaService wxMaService = WxMaConfiguration.getMaService("wx75ea31b8c4707d16");
 
+    /**
+     * 本地联调开关: 开启后跳过微信 code2session 校验, 映射到稳定 mock 用户
+     */
+    @Value("${studyroom.dev.mock-login:false}")
+    private boolean mockLoginEnabled;
+
     public String wxLogin( String code) throws WxErrorException {
         HttpServletRequest request = ServletUtils.getRequest();
         // code 为 小程序调用 wx.login 授权后获取
         // 校验 appid + appsrcret + xcxCode 调用登录凭证校验接口 获取 session_key 与 openid
-        WxMaJscode2SessionResult result = wxMaService.jsCode2SessionInfo(code);
+        WxMaJscode2SessionResult result;
+        if (mockLoginEnabled) {
+            // 本地联调: 开启后跳过微信登录凭证校验, 统一映射到稳定的 mock 用户, 保证数据不重置
+            log.warn("[dev] 使用模拟登录 code={}", code);
+            result = new WxMaJscode2SessionResult();
+            String mockSuffix = (code != null && code.startsWith("mock-")) ? code.substring(5) : "demo";
+            result.setOpenid("mock-openid-" + mockSuffix);
+            result.setSessionKey("mock-session-" + mockSuffix);
+        } else {
+            result = wxMaService.jsCode2SessionInfo(code);
+        }
         String openid = result.getOpenid();
         User user = loadUserByOpenid(openid);
         // 此处可根据登录用户的数据不同 自行创建 loginUser
@@ -71,7 +88,17 @@ public class WxLoginService {
      * @throws WxErrorException
      */
     public WxMaPhoneNumberInfo getPhone(String code) throws WxErrorException {
-        WxMaPhoneNumberInfo phoneNoInfo = wxMaService.getUserService().getNewPhoneNoInfo(code);
+        WxMaPhoneNumberInfo phoneNoInfo;
+        if (mockLoginEnabled) {
+            // 本地联调: 跳过真实微信手机号校验, 返回模拟手机号
+            log.warn("[dev] 使用模拟手机号绑定 code={}", code);
+            phoneNoInfo = new WxMaPhoneNumberInfo();
+            phoneNoInfo.setPhoneNumber("13800138000");
+            phoneNoInfo.setPurePhoneNumber("13800138000");
+            phoneNoInfo.setCountryCode("86");
+        } else {
+            phoneNoInfo = wxMaService.getUserService().getNewPhoneNoInfo(code);
+        }
         String phoneNumber = phoneNoInfo.getPhoneNumber();
         User user = userService.selectUserByOpenid(LoginHelper.getWxLoginUser().getOpenid());
         user.setPhone(phoneNumber);

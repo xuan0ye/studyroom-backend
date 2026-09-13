@@ -74,5 +74,29 @@ public class OrderCardBo extends BaseEntity {
     @NotNull(message = "付款状态不能为空", groups = { AddGroup.class, EditGroup.class })
     private Integer payStatus;
 
+    /**
+     * 余额抵扣金额(点)
+     */
+    @ApiModelProperty(value = "余额抵扣金额")
+    private BigDecimal balanceAmount;
+
+    /**
+     * 积分抵扣金额
+     */
+    @ApiModelProperty(value = "积分抵扣金额")
+    private BigDecimal pointsAmount;
+
+    /**
+     * 消耗积分
+     */
+    @ApiModelProperty(value = "消耗积分")
+    private Integer pointsCost;
+
+    /**
+     * 微信实付金额
+     */
+    @ApiModelProperty(value = "微信实付金额")
+    private BigDecimal cashAmount;
+
 
 }

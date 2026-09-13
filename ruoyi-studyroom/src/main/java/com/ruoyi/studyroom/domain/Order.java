@@ -63,6 +63,26 @@ public class Order extends BaseEntity {
     private Integer payStatus;
 
     /**
+     * 预约履约状态
+     */
+    private String orderStatus;
+
+    /**
+     * 设备控制状态
+     */
+    private String deviceControlStatus;
+
+    /**
+     * 控制重试次数
+     */
+    private Integer controlRetryCount;
+
+    /**
+     * 下次重试时间
+     */
+    private Date nextRetryTime;
+
+    /**
      * 小时数
      */
     private Double hours;

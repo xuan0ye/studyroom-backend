@@ -109,8 +109,8 @@ sa-token:
   is-read-cookie: false
   # token前缀
   token-prefix: "Bearer"
-  # jwt秘钥
-  jwt-secret-key: abcdefghijklmnopqrstuvwxyz
+  # jwt秘钥 (生产部署务必使用随机强密钥; 修改后所有已签发token失效, 用户需重新登录)
+  jwt-secret-key: 884243e68ebb5970ce86403a74bf6b5a106696dafe03f0c005e070b539e68e5f
   # 是否输出操作日志
   is-log: true
 
@@ -129,6 +129,8 @@ security:
     - /**/*.html
     - /**/*.css
     - /**/*.js
+    # 本地上传文件(轮播图等)
+    - /upload/**
     # swagger 文档配置
     - /favicon.ico
     - /doc.html
@@ -143,9 +145,20 @@ security:
     - /api/wx/login
     - /api/wx/common/store
     - /api/wx/common/swiper
+    - /api/wx/common/promo
     - /api/wx/common/card
+    - /api/wx/common/seatPositions
     - /api/wx/pay/notify/order
-    - /api/wx/device/**
+    # 抖音生活服务 SPI 回调(抖音服务器直接调用, 无登录态; 由 SPI 验签保证来源)
+    - /goodlife/**
+    - /goodlife/v1/fulfilment/**
+    - /api/faceDeivce/login
+    - /api/faceDevice/report
+    # 门禁设备协议抓包(设备服务器地址指向本系统时设备请求的路径)
+    - /server
+    - /server/**
+    - /access
+    - /access/**
 
 # MyBatisPlus配置
 # https://baomidou.com/config/
@@ -299,16 +312,18 @@ wx:
   miniapp:
     configs:
       - appid: wx75ea31b8c4707d16 #微信小程序的appid
-        secret: your-wechat-secret-here #微信小程序的Secret(请在微信公众平台获取)
+        secret: bf6bff0de59ad7365f0c13e53e59a992 #微信小程序的AppSecret(2026-09-06实测获取access_token成功; be478adff1806e332db6ecb01631d5c3实测40125无效)
         msgDataFormat: JSON
   pay:
-    appId:  #微信公众号或者小程序等的appid
-    mchId:  #微信支付商户号
-    mchKey:  #微信支付商户密钥
-    apiV3Key: #微信支付商户密钥
-    privateKeyPath: #classpath:/apiclient_key.pem # p12证书的位置，可以指定绝对路径，也可以指定类路径（以classpath:开头）
-    privateCertPath: #classpath:/apiclient_cert.pem # p12证书的位置，可以指定绝对路径，也可以指定类路径（以classpath:开头）
-    notifyUrl: #http://39z712290i.qicp.vip/api/wx/pay/notify/order 微信支付回调地址
+    appId: wx75ea31b8c4707d16 #微信支付绑定的appid(与小程序一致, 商户平台已绑定)
+    mchId: 1115944767 #微信支付商户号
+    mchKey:  #APIv2密钥, 已全部使用 APIv3+公钥模式, 留空
+    apiV3Key: DaYouSuoAn15803875080WuJiaHan123 #微信支付APIv3密钥
+    privateKeyPath: classpath:cert/apiclient_key.pem #商户API证书私钥(apiclient_key.pem)
+    privateCertPath: classpath:cert/apiclient_cert.pem #商户API证书(apiclient_cert.pem)
+    notifyUrl: https://api.dayousuoan.top/api/wx/pay/notify/order #微信支付回调地址(需与商户平台配置的域名一致)
+    publicKeyId: PUB_KEY_ID_0111159447672026081500111649000800 #微信支付公钥ID(商户平台-账户中心-API安全-微信支付公钥)
+    publicKeyPath: classpath:cert/pub_key.pem #微信支付公钥文件(pub_key.pem)
 
 --- # 米家IoT设备配置
 miot:
@@ -324,6 +339,63 @@ miot:
     password:   # MQTT密码
   # 小米IoT平台API (需注册开发者: https://iot.mi.com)
   api:
+    base-url: https://open.home.mi.com
+    app-id: ${MIOT_APP_ID:}   # 小米开放平台 appId
+    app-secret: ${MIOT_APP_SECRET:}   # 小米开放平台 appSecret
+    access-token: ${MIOT_ACCESS_TOKEN:}   # 初始 access token
+    refresh-token: ${MIOT_REFRESH_TOKEN:}   # refresh token
+    # 兼容旧配置（后续可移除）
     url: https://api.home.mi.com
-    app-id:   # 小米IoT平台AppID
-    app-key:   # 小米IoT平台AppKey
+    app-key:
+
+studyroom:
+  # 米家灵动开关桥接(座位灯控制)
+  miot:
+    # 桥接脚本路径(服务器部署时改为服务器上的路径, 如 /opt/studyroom/tools/miot_bridge.py)
+    bridge-script: ${STUDYROOM_MIOT_SCRIPT:G:/1自习室小程序/tools/miot_bridge.py}
+    # Python 可执行文件(服务器可用绝对路径, 如 /usr/bin/python3)
+    python: ${STUDYROOM_MIOT_PYTHON:python}
+  device:
+    compensation:
+      cron: 0 */1 * * * ?
+      max-retry-attempts: 5
+      backoff-minutes: 1,3,10
+    alert:
+      webhook-url:
+  access:
+    mqtt:
+      host: tcp://127.0.0.1:1883
+      username:
+      password:
+      pub-topic: face-device/sub
+      sub-topic: face-device/pub
+    redis:
+      command-channel: studyroom:access:command
+    bridge:
+      enabled: false
+      client-id-prefix: studyroom-access-bridge-
+      reconnect-delay-ms: 15000
+      # 若需要走HTTP回调填本项，例如: http://127.0.0.1:8081/api/faceDevice/report
+      upstream-callback-url:
+    alert:
+      webhook-url:
+      temperature-threshold: 37.3
+    revoke:
+      cron: 0 */2 * * * ?
+      max-retry-attempts: 5
+      backoff-minutes: 1,3,10
+    probe:
+      enabled: true
+      response: '{"code":0,"msg":"success"}'
+  ai:
+    enabled: true
+    base-url: https://open.bigmodel.cn/api/paas/v4
+    api-key: "39087af2bc6c4d559b1ba80856555137.sK8KOdDFsiFGuU3p"
+    chat-model: glm-4-flash
+    embedding-model: embedding-2
+    temperature: 0.7
+    max-tokens: 1024
+    timeout-sec: 60
+    history-turns: 3
+    kb-enabled: true
+    kb-top-k: 4

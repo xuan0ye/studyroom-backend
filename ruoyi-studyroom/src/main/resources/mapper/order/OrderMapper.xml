@@ -21,14 +21,18 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         <result property="areaName" column="area_name"/>
         <result property="total" column="total"/>
         <result property="payMethod" column="pay_method"/>
+        <result property="userName" column="user_name"/>
+        <result property="userPhone" column="user_phone"/>
     </resultMap>
 
     <select id="selectVoAndSeatPage" resultMap="OrderResult">
-        select id,order_id,user_id,description,start_time,end_time,hours,pay_status,room_name,
-               area_name,seat_num,seat_area,total,pay_method
+        select so.id,so.order_id,so.user_id,so.description,so.start_time,so.end_time,so.hours,so.pay_status,
+               sr.room_name, ss.seat_num, ss.seat_area, ss.area_name, so.total, so.pay_method,
+               su.nickname as user_name, su.phone as user_phone
         from sr_order so
                  left join sr_room sr on so.room_id = sr.room_id
                  left join sr_seat ss on so.seat_id = ss.seat_id
+                 left join sr_user su on so.user_id = su.user_id
         ${ew.customSqlSegment} order by so.start_time desc,pay_status
     </select>
 </mapper>

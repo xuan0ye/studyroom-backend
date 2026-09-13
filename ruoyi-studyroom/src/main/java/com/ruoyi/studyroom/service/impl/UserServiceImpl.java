@@ -13,6 +13,7 @@ import com.ruoyi.studyroom.service.IBalanceService;
 import com.ruoyi.studyroom.service.IRecordService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 import com.ruoyi.studyroom.domain.bo.UserBo;
 import com.ruoyi.studyroom.domain.vo.UserVo;
 import com.ruoyi.studyroom.domain.User;
@@ -33,6 +34,9 @@ import java.util.Collection;
 @RequiredArgsConstructor
 @Service
 public class UserServiceImpl implements IUserService {
+
+    @Value("${studyroom.dev.initial-balance:0}")
+    private int initialBalance;
 
     private final UserMapper baseMapper;
     private final IBalanceService balanceService;
@@ -170,7 +174,7 @@ public class UserServiceImpl implements IUserService {
         User user = insertByOpenid(bo);
         BalanceBo balanceBo = new BalanceBo();
         balanceBo.setUserId(user.getUserId());
-        balanceBo.setBalance(0);
+        balanceBo.setBalance(initialBalance);
         RecordBo recordBo = new RecordBo();
         recordBo.setUserId(user.getUserId());
         recordBo.setHours(0.00);

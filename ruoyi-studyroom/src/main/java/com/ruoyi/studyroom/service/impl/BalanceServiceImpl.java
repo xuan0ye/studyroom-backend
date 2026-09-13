@@ -156,4 +156,45 @@ public class BalanceServiceImpl implements IBalanceService {
         lqw.eq(Balance::getUserId, userId);
         return baseMapper.selectVoOne(lqw);
     }
+
+    @Override
+    public void deduct(java.math.BigDecimal amount, Long userId) {
+        if (amount == null || amount.compareTo(java.math.BigDecimal.ZERO) <= 0 || userId == null) {
+            return;
+        }
+        // 余额单位是整数"点"(1点=1元), 抵扣金额按元转整数点(向上取整, 至少1点)
+        long need = amount.setScale(0, java.math.RoundingMode.CEILING).longValue();
+        if (need <= 0) {
+            return;
+        }
+        // 原子扣减: UPDATE sr_balance SET balance=balance-? WHERE user_id=? AND balance>=?
+        // 影响行数为0 = 余额不足, 不产生任何修改(防并发超扣)
+        int rows = baseMapper.deductBalance(userId, need);
+        if (rows <= 0) {
+            throw new com.ruoyi.common.exception.ServiceException("余额不足");
+        }
+    }
+
+    @Override
+    public void add(Long userId, int points) {
+        if (userId == null || points <= 0) {
+            return;
+        }
+        int rows = baseMapper.addBalance(userId, points);
+        if (rows <= 0) {
+            // 余额账户不存在(首次充值): 创建后再原子加一次, 防并发重复创建
+            synchronized (userId.toString().intern()) {
+                BalanceVo vo = queryByUserId(userId);
+                if (vo == null) {
+                    BalanceBo nb = new BalanceBo();
+                    nb.setUserId(userId);
+                    nb.setBalance(points);
+                    nb.setCreateTime(new java.util.Date());
+                    insertByBo(nb);
+                    return;
+                }
+                baseMapper.addBalance(userId, points);
+            }
+        }
+    }
 }

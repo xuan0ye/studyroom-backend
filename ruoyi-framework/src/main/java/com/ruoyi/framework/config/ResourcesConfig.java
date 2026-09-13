@@ -11,6 +11,8 @@ import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import java.io.File;
+
 /**
  * 通用配置
  *
@@ -29,6 +31,10 @@ public class ResourcesConfig implements WebMvcConfigurer {
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        // 本地上传文件映射: /upload/** -> {运行目录}/upload/ (轮播图等本地存储)
+        String uploadPath = System.getProperty("user.dir") + File.separator + "upload" + File.separator;
+        registry.addResourceHandler("/upload/**")
+            .addResourceLocations("file:" + uploadPath);
     }
 
     /**

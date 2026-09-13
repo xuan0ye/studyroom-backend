@@ -68,5 +68,34 @@ public class SeatRecordVo {
     @ApiModelProperty("结束时间")
     private Date endTime;
 
+    /**
+     * 用户昵称(联表 sr_user)
+     */
+    @ApiModelProperty("用户昵称")
+    private String userName;
+
+    /**
+     * 用户手机号(联表 sr_user)
+     */
+    @ApiModelProperty("用户手机号")
+    private String userPhone;
+
+    /**
+     * 自习室名称(联表 sr_room)
+     */
+    @ApiModelProperty("自习室名称")
+    private String roomName;
+
+    /**
+     * 座位号(联表 sr_seat)
+     */
+    @ApiModelProperty("座位号")
+    private Integer seatNum;
+
+    /**
+     * 座位区域名(联表 sr_seat)
+     */
+    @ApiModelProperty("座位区域名")
+    private String areaName;
 
 }

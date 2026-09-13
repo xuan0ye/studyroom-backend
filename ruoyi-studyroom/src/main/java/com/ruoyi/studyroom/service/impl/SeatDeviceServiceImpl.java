@@ -1,6 +1,7 @@
 package com.ruoyi.studyroom.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.ruoyi.studyroom.domain.SeatDevice;
 import com.ruoyi.studyroom.domain.bo.SeatDeviceBo;
 import com.ruoyi.studyroom.domain.vo.SeatDeviceVo;
@@ -11,9 +12,6 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 
-/**
- * 座位设备 Service 实现
- */
 @Service
 @RequiredArgsConstructor
 public class SeatDeviceServiceImpl implements ISeatDeviceService {
@@ -22,7 +20,8 @@ public class SeatDeviceServiceImpl implements ISeatDeviceService {
 
     @Override
     public List<SeatDeviceVo> queryList(SeatDeviceBo bo) {
-        return seatDeviceMapper.queryList(bo);
+        LambdaQueryWrapper<SeatDevice> lqw = buildQueryWrapper(bo);
+        return seatDeviceMapper.selectVoList(lqw);
     }
 
     @Override
@@ -51,13 +50,27 @@ public class SeatDeviceServiceImpl implements ISeatDeviceService {
     public List<SeatDeviceVo> queryBySeatId(Long seatId) {
         SeatDeviceBo bo = new SeatDeviceBo();
         bo.setSeatId(seatId);
-        return seatDeviceMapper.queryList(bo);
+        return queryList(bo);
     }
 
     @Override
     public List<SeatDeviceVo> queryByRoomId(Long roomId) {
         SeatDeviceBo bo = new SeatDeviceBo();
         bo.setRoomId(roomId);
-        return seatDeviceMapper.queryList(bo);
+        return queryList(bo);
+    }
+
+    private LambdaQueryWrapper<SeatDevice> buildQueryWrapper(SeatDeviceBo bo) {
+        LambdaQueryWrapper<SeatDevice> lqw = new LambdaQueryWrapper<>();
+        if (bo.getSeatId() != null) {
+            lqw.eq(SeatDevice::getSeatId, bo.getSeatId());
+        }
+        if (bo.getRoomId() != null) {
+            lqw.eq(SeatDevice::getRoomId, bo.getRoomId());
+        }
+        if (bo.getDeviceUid() != null) {
+            lqw.eq(SeatDevice::getDeviceUid, bo.getDeviceUid());
+        }
+        return lqw;
     }
 }

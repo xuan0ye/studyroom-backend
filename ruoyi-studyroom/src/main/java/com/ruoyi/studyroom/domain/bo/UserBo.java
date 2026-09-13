@@ -73,5 +73,10 @@ public class UserBo extends BaseEntity {
     @NotNull(message = "状态不能为空", groups = { AddGroup.class, EditGroup.class })
     private Integer status;
 
+    /**
+     * 是否在预约界面公开头像: 1-公开 0-不公开
+     */
+    @ApiModelProperty(value = "是否在预约界面公开头像: 1-公开 0-不公开")
+    private Integer showAvatar;
 
 }

@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.ruoyi.common.constant.Constants;
 import com.ruoyi.common.constant.PayConstants;
 import com.ruoyi.common.exception.ServiceException;
+
 import com.ruoyi.common.helper.LoginHelper;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.common.core.page.TableDataInfo;
@@ -34,6 +35,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Map;
 import java.util.Collection;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.Date;
 import java.util.Objects;
 
 /**
@@ -109,20 +113,24 @@ public class OrderServiceImpl implements IOrderService {
     @Transactional(rollbackFor = Exception.class)
     @Override
     public Boolean insertByBo(OrderBo bo) {
-        //使用账户余额预定座位
-        if (Constants.PAY_BALANCE.equals(bo.getPayMethod())){
-            BalanceVo balanceVo = balanceService.queryByUserId(LoginHelper.getUserId());
-            BalanceBo balanceBo = BeanUtil.toBean(balanceVo, BalanceBo.class);
-            System.out.println(balanceBo.getBalance());
-            System.out.println(bo.getTotal());
-            if ( balanceBo.getBalance() >= bo.getTotal()){
-                balanceBo.setBalance(balanceBo.getBalance() - bo.getTotal());
-                balanceService.updateByBo(balanceBo);
-            }else {
-                return false;
+        // 同座位时段冲突校验: 已支付未消费的订单仍占用座位, 防止重复预约
+        if (bo.getSeatId() != null && bo.getStartTime() != null && bo.getEndTime() != null) {
+            LambdaQueryWrapper<Order> conflict = Wrappers.lambdaQuery();
+            conflict.eq(Order::getSeatId, bo.getSeatId())
+                .eq(Order::getPayStatus, PayConstants.NOT_CONSUMED)
+                .lt(Order::getStartTime, bo.getEndTime())
+                .gt(Order::getEndTime, bo.getStartTime());
+            if (baseMapper.selectCount(conflict) > 0) {
+                throw new ServiceException("该座位在该时段已被预约，请重新选座");
             }
-
-        }else {
+        }
+        //使用账户余额预定座位: 原子扣减(防止并发超扣), 余额不足抛异常由事务回滚
+        if (Constants.PAY_BALANCE.equals(bo.getPayMethod())){
+            if (bo.getTotal() == null || bo.getTotal() <= 0) {
+                throw new ServiceException("订单金额异常");
+            }
+            balanceService.deduct(java.math.BigDecimal.valueOf(bo.getTotal()), LoginHelper.getUserId());
+        } else {
             //todo 使用消费卡预定座位 逻辑
         }
         Order add = BeanUtil.toBean(bo, Order.class);
@@ -167,19 +175,46 @@ public class OrderServiceImpl implements IOrderService {
     @Transactional(rollbackFor = Exception.class)
     @Override
     public Boolean updateByBoAndRank(OrderBo orderBo) throws Exception {
-        LambdaQueryWrapper<Order> lqw = Wrappers.lambdaQuery();
-        lqw.eq(Order::getOrderId, orderBo.getOrderId());
-        Order update = BeanUtil.toBean(orderBo, Order.class);
-        RecordVo recordVo = recordService.queryByUserId(LoginHelper.getUserId());
-        RecordBo recordBo = BeanUtil.toBean(recordVo, RecordBo.class);
-        recordBo.setHours(recordVo.getHours() + orderBo.getHours());
-        boolean order = baseMapper.update(update,lqw) > 0;
-        Boolean updateByBo = recordService.updateByBo(recordBo);
-        if(!order){
+        if (orderBo.getOrderId() == null) {
+            throw new ServiceException("参数错误");
+        }
+        Long userId = LoginHelper.getUserId();
+        // 归属+状态闸门: 只能消费本人"未消费"的订单, 防重复累加学习时长/篡改他人订单
+        LambdaQueryWrapper<Order> q = Wrappers.lambdaQuery();
+        q.eq(Order::getOrderId, orderBo.getOrderId())
+            .eq(Order::getUserId, userId)
+            .eq(Order::getPayStatus, PayConstants.NOT_CONSUMED)
+            .last("limit 1");
+        Order order = baseMapper.selectOne(q);
+        if (order == null) {
+            Long cnt = baseMapper.selectCount(Wrappers.<Order>lambdaQuery().eq(Order::getOrderId, orderBo.getOrderId()));
+            throw new ServiceException(cnt != null && cnt > 0 ? "该订单不可重复消费" : "订单不存在");
+        }
+        // 学习时长以订单起止时段由服务端计算(客户端 hours 不可信, 防刷榜)
+        double hours = 0;
+        if (order.getStartTime() != null && order.getEndTime() != null) {
+            long ms = order.getEndTime().getTime() - order.getStartTime().getTime();
+            hours = ms > 0 ? Math.round(ms / 3600000.0 * 10) / 10.0 : 0;
+        }
+        // 状态机推进 NOT_CONSUMED(3) -> CONSUMED(4), 带条件更新保证幂等
+        boolean ok = baseMapper.update(null, Wrappers.<Order>lambdaUpdate()
+            .eq(Order::getOrderId, order.getOrderId())
+            .eq(Order::getUserId, userId)
+            .eq(Order::getPayStatus, PayConstants.NOT_CONSUMED)
+            .set(Order::getPayStatus, PayConstants.CONSUMED)
+            .set(Order::getHours, hours)) > 0;
+        if (!ok) {
             throw new ServiceException("操作失败，请重试");
         }
-        if (!updateByBo){
-            throw new ServiceException("操作失败，请重试");
+        // 仅消费成功时累加一次学习时长
+        if (hours > 0) {
+            RecordVo recordVo = recordService.queryByUserId(userId);
+            if (recordVo != null) {
+                RecordBo recordBo = BeanUtil.toBean(recordVo, RecordBo.class);
+                double cur = recordVo.getHours() == null ? 0 : recordVo.getHours();
+                recordBo.setHours(cur + hours);
+                recordService.updateByBo(recordBo);
+            }
         }
         return true;
     }
@@ -206,4 +241,41 @@ public class OrderServiceImpl implements IOrderService {
         }
         return baseMapper.deleteBatchIds(ids) > 0;
     }
+
+    /**
+     * 批量过期指定日期前的订单
+     *
+     * @param date 过期日期
+     */
+    @Override
+    public void expireDailyOrders(LocalDate date) {
+        Date expireDate = Date.from(date.atStartOfDay(ZoneId.systemDefault()).toInstant());
+        LambdaQueryWrapper<Order> lqw = Wrappers.lambdaQuery();
+        lqw.lt(Order::getEndTime, expireDate);
+        // 座位订单创建即 NOT_CONSUMED(3)(余额预付即时下单); UNPAID(0) 一并清理
+        lqw.and(w -> w.eq(Order::getPayStatus, PayConstants.NOT_CONSUMED)
+            .or().eq(Order::getPayStatus, PayConstants.UNPAID));
+        Order update = new Order();
+        update.setPayStatus(5); // 5-已过期
+        baseMapper.update(update, lqw);
+    }
+
+    /**
+     * 查询用户今日订单
+     *
+     * @param userId 会员ID
+     * @param date 日期
+     * @return 订单列表
+     */
+    @Override
+    public List<OrderVo> getTodayOrders(Long userId, LocalDate date) {
+        Date start = Date.from(date.atStartOfDay(ZoneId.systemDefault()).toInstant());
+        Date end = Date.from(date.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant());
+        LambdaQueryWrapper<Order> lqw = Wrappers.lambdaQuery();
+        lqw.eq(Order::getUserId, userId);
+        lqw.ge(Order::getStartTime, start);
+        lqw.lt(Order::getStartTime, end);
+        return baseMapper.selectVoList(lqw);
+    }
 }
+

@@ -5,6 +5,7 @@ import com.alibaba.excel.annotation.ExcelIgnoreUnannotated;
 import com.alibaba.excel.annotation.ExcelProperty;
 import com.ruoyi.common.annotation.ExcelDictFormat;
 import com.ruoyi.common.convert.ExcelDictConvert;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import io.swagger.annotations.ApiModel;
 import io.swagger.annotations.ApiModelProperty;
 import lombok.Data;
@@ -75,5 +76,42 @@ public class OrderCardVo {
     @ApiModelProperty("付款状态")
     private Integer payStatus;
 
+    /**
+     * 用户昵称(联表 sr_user)
+     */
+    @ApiModelProperty("用户昵称")
+    private String userNickname;
+
+    /**
+     * 用户手机号(联表 sr_user)
+     */
+    @ApiModelProperty("用户手机号")
+    private String userPhone;
+
+    /**
+     * 卡标题(联表 sr_card)
+     */
+    @ApiModelProperty("卡标题")
+    private String cardTitle;
+
+    /**
+     * 开卡时间(下单时间)
+     */
+    @ApiModelProperty("开卡时间")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private Date createTime;
+
+    /**
+     * 卡有效期(天, 联表 sr_card)
+     */
+    @ApiModelProperty("卡有效期(天)")
+    private Long cardTerm;
+
+    /**
+     * 卡到期时间(开卡时间+有效期)
+     */
+    @ApiModelProperty("卡到期时间")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private Date expiryTime;
 
 }

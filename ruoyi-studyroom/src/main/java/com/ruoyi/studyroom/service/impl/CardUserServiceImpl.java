@@ -30,6 +30,7 @@ import java.util.Collection;
 public class CardUserServiceImpl implements ICardUserService {
 
     private final CardUserMapper baseMapper;
+    private final com.ruoyi.studyroom.service.ICardService cardService;
 
     /**
      * 查询优惠卡-会员关联
@@ -84,6 +85,15 @@ public class CardUserServiceImpl implements ICardUserService {
     @Override
     public Boolean insertByBo(CardUserBo bo) {
         CardUser add = BeanUtil.toBean(bo, CardUser.class);
+        // 剩余天数缺省=卡term(长期卡停卡/续启结算用; 未显式设置时按卡定义补全)
+        if (add.getRemainingDays() == null && add.getCardId() != null) {
+            try {
+                com.ruoyi.studyroom.domain.vo.CardVo cv = cardService.queryById(add.getCardId());
+                if (cv != null && cv.getTerm() != null) {
+                    add.setRemainingDays(cv.getTerm().intValue());
+                }
+            } catch (Exception ignore) { }
+        }
         validEntityBeforeSave(add);
         boolean flag = baseMapper.insert(add) > 0;
         if (flag) {
@@ -103,6 +113,21 @@ public class CardUserServiceImpl implements ICardUserService {
         CardUser update = BeanUtil.toBean(bo, CardUser.class);
         validEntityBeforeSave(update);
         return baseMapper.updateById(update) > 0;
+    }
+
+    /**
+     * 清空卡的锁座信息(显式 set null, updateById 会忽略 null 字段)
+     */
+    @Override
+    public void clearLockSeat(Long cardUserId) {
+        if (cardUserId == null) return;
+        com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<CardUser> wrapper =
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<>();
+        wrapper.eq(CardUser::getId, cardUserId)
+            .set(CardUser::getLockSeatId, null)
+            .set(CardUser::getLockStartTime, null)
+            .set(CardUser::getLockEndTime, null);
+        baseMapper.update(null, wrapper);
     }
 
     /**

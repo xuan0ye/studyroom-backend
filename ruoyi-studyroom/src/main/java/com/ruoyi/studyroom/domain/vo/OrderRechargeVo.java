@@ -4,6 +4,7 @@ import com.alibaba.excel.annotation.ExcelIgnoreUnannotated;
 import com.alibaba.excel.annotation.ExcelProperty;
 import com.ruoyi.common.annotation.ExcelDictFormat;
 import com.ruoyi.common.convert.ExcelDictConvert;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import io.swagger.annotations.ApiModel;
 import io.swagger.annotations.ApiModelProperty;
 import lombok.Data;
@@ -76,5 +77,23 @@ public class OrderRechargeVo {
     @ApiModelProperty("付款状态")
     private Integer payStatus;
 
+    /**
+     * 用户昵称(联表 sr_user)
+     */
+    @ApiModelProperty("用户昵称")
+    private String userNickname;
+
+    /**
+     * 用户手机号(联表 sr_user)
+     */
+    @ApiModelProperty("用户手机号")
+    private String userPhone;
+
+    /**
+     * 充值时间
+     */
+    @ApiModelProperty("充值时间")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private Date createTime;
 
 }

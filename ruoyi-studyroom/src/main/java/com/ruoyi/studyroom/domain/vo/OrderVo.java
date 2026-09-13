@@ -90,6 +90,12 @@ public class OrderVo {
     @ApiModelProperty("付款状态")
     private Integer payStatus;
 
+    /**
+     * 预约履约状态
+     */
+    @ApiModelProperty("预约履约状态")
+    private String orderStatus;
+
 
     @ExcelProperty(value = "小时数")
     @ApiModelProperty("小时数")
@@ -119,4 +125,16 @@ public class OrderVo {
      * 区域名字
      */
     private String areaName;
+
+    /**
+     * 用户昵称(联表 sr_user)
+     */
+    @ApiModelProperty("用户昵称")
+    private String userName;
+
+    /**
+     * 用户手机号(联表 sr_user)
+     */
+    @ApiModelProperty("用户手机号")
+    private String userPhone;
 }

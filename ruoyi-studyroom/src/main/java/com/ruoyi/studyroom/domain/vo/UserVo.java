@@ -75,5 +75,10 @@ public class UserVo {
     @ApiModelProperty("状态")
     private Integer status;
 
+    /**
+     * 是否在预约界面公开头像: 1-公开 0-不公开
+     */
+    @ApiModelProperty("是否在预约界面公开头像: 1-公开 0-不公开")
+    private Integer showAvatar;
 
 }

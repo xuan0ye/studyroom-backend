@@ -86,4 +86,20 @@ public interface IBalanceService {
      * @return
      */
     BalanceVo queryByUserId(Long userId);
+
+    /**
+     * 扣减余额(购买抵扣)
+     *
+     * @param amount 扣减金额
+     * @param userId 用户ID
+     */
+    void deduct(java.math.BigDecimal amount, Long userId);
+
+    /**
+     * 原子增加余额(充值入账), 无余额账户时自动创建
+     *
+     * @param userId 用户ID
+     * @param points 增加点数(正整数, 1点=1元)
+     */
+    void add(Long userId, int points);
 }

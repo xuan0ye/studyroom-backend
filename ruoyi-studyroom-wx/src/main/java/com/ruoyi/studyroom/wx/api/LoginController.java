@@ -47,6 +47,8 @@ public class LoginController extends BaseController {
         try {
             token = loginService.wxLogin(code);
             ajax.put("token", token);
+            // 同时返回 userId, 供前端存储后按 userId 匹配"我的排名"等
+            ajax.put("userId", LoginHelper.getUserId());
             return R.ok(ajax);
         } catch (UserException e) {
             return R.fail(Integer.parseInt(UserStatus.DISABLE.getCode()),e.getMessage());

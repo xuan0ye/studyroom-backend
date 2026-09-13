@@ -9,6 +9,22 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         <result property="userId" column="user_id"/>
         <result property="cardId" column="card_id"/>
         <result property="expiryTime" column="expiry_time"/>
+        <result property="consumed" column="consumed"/>
+    </resultMap>
+
+    <!-- 自定义查询用 resultMap: 含锁座字段 + 卡关联 -->
+    <resultMap type="com.ruoyi.studyroom.domain.vo.CardUserVo" id="CardUserLockResult">
+        <result property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="cardId" column="card_id"/>
+        <result property="expiryTime" column="expiry_time"/>
+        <result property="lockSeatId" column="lock_seat_id"/>
+        <result property="lockStartTime" column="lock_start_time"/>
+        <result property="lockEndTime" column="lock_end_time"/>
+        <result property="leaveCount" column="leave_count"/>
+        <result property="remainingDays" column="remaining_days"/>
+        <result property="consumed" column="consumed"/>
+        <result property="createTime" column="create_time"/>
         <association property="card" javaType="com.ruoyi.studyroom.domain.vo.CardVo">
             <result property="cardTitle" column="card_title"/>
             <result property="price" column="price"/>
@@ -17,9 +33,11 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             <result property="term" column="term"/>
         </association>
     </resultMap>
-    <select id="selectVoListByUserId" resultMap="CardUserResult">
+    <select id="selectVoListByUserId" resultMap="CardUserLockResult">
         select
-        scu.id,scu.card_id, scu.user_id, sc.card_title, sc.price, sc.usable, sc.frequency, sc.term,scu.expiry_time
+        scu.id,scu.card_id, scu.user_id, sc.card_title, sc.price, sc.usable, sc.frequency, sc.term,scu.expiry_time,
+        scu.lock_seat_id, scu.lock_start_time, scu.lock_end_time, scu.leave_count, scu.remaining_days, scu.create_time,
+        (select count(*) from sr_day_card_consumption sdc where sdc.card_user_id = scu.id and (sdc.del_flag is null or sdc.del_flag = '0')) as consumed
         from sr_card_user scu
                      left join sr_card sc on scu.card_id = sc.id
         ${ew.customSqlSegment}
