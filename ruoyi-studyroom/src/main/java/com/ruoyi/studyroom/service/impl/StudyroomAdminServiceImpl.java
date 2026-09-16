@@ -293,7 +293,8 @@ public class StudyroomAdminServiceImpl implements IStudyroomAdminService {
         if (card == null) {
             throw new ServiceException("卡不存在: " + bo.getCardId());
         }
-        if (card.getUsable() != null && card.getUsable() == 0) {
+        // 停用判断看 status(1=启用/0=停用); usable 是区域标记(0=舒适区/1=经济区), 不能当停用状态用
+        if (card.getStatus() != null && card.getStatus() == 0) {
             throw new ServiceException("该卡已停用, 不能发放: " + card.getCardTitle());
         }
 
