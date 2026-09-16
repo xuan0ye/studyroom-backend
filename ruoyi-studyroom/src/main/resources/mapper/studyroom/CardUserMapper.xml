@@ -37,7 +37,7 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         select
         scu.id,scu.card_id, scu.user_id, sc.card_title, sc.price, sc.usable, sc.frequency, sc.term,scu.expiry_time,
         scu.lock_seat_id, scu.lock_start_time, scu.lock_end_time, scu.leave_count, scu.remaining_days, scu.create_time,
-        (select count(*) from sr_day_card_consumption sdc where sdc.card_user_id = scu.id and (sdc.del_flag is null or sdc.del_flag = '0')) as consumed
+        (select count(*) from sr_day_card_consumption sdc where sdc.card_user_id = scu.id and sdc.status != 2 and (sdc.del_flag is null or sdc.del_flag = '0')) as consumed
         from sr_card_user scu
                      left join sr_card sc on scu.card_id = sc.id
         ${ew.customSqlSegment}

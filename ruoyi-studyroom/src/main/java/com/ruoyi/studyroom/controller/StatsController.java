@@ -65,9 +65,9 @@ public class StatsController extends BaseController {
         // 订单总数
         data.put("orderCount", orderMapper.selectCount(null));
 
-        // 用户持卡数(有效卡)
+        // 用户持卡数(有效卡: 未激活的永久有效卡也算)
         LambdaQueryWrapper<CardUser> cardUserWrapper = new LambdaQueryWrapper<>();
-        cardUserWrapper.ge(CardUser::getExpiryTime, new Date());
+        cardUserWrapper.and(w -> w.isNull(CardUser::getExpiryTime).or().ge(CardUser::getExpiryTime, new Date()));
         data.put("activeCardCount", cardUserMapper.selectCount(cardUserWrapper));
 
         // 卡种类数

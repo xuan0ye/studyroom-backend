@@ -278,7 +278,7 @@ public class DouyinVerifyService {
         CardUserBo cu = new CardUserBo();
         cu.setUserId(userId);
         cu.setCardId(card.getId());
-        cu.setExpiryTime(DateUtil.offsetDay(new Date(), term));
+        // 发卡不写有效期: 自首次预约使用起算, 核销后暂不使用也不会过期
         cardUserService.insertByBo(cu);
         Long cardUserId = cu.getId();
 
@@ -305,13 +305,23 @@ public class DouyinVerifyService {
         douyinMapper.insertVerify(rec);
         clearSession(sessionId);
 
+        // 核销时若已指定座位 => bookByDayCard 已完成"首次使用激活", 有效期为首次使用 + term 天
+        String expiryOut = null;
+        if (consumptionId != null && cardUserId != null) {
+            com.ruoyi.studyroom.domain.vo.CardUserVo issued = cardUserService.queryById(cardUserId);
+            if (issued != null && issued.getExpiryTime() != null) {
+                expiryOut = DateUtil.formatDateTime(issued.getExpiryTime());
+            }
+        }
         out.put("grantType", GRANT_CARD);
         out.put("cardId", card.getId());
         out.put("cardTitle", card.getCardTitle());
-        out.put("expiryTime", DateUtil.formatDateTime(cu.getExpiryTime()));
+        out.put("expiryTime", expiryOut);
         out.put("consumptionId", consumptionId);
         out.put("seatId", seatId);
-        out.put("message", "核销成功，已发放「" + card.getCardTitle() + "」");
+        out.put("message", expiryOut == null
+            ? "核销成功，已发放「" + card.getCardTitle() + "」，首次预约使用后 " + term + " 天内有效"
+            : "核销成功，已发放「" + card.getCardTitle() + "」");
         return out;
     }
 

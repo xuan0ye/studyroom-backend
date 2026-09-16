@@ -186,12 +186,10 @@ public class OrderCardServiceImpl implements IOrderCardService {
             throw new com.ruoyi.common.exception.ServiceException("卡信息异常，发卡失败");
         }
         int term = cardVo.getTerm().intValue();
-        String now = DateUtil.now();
-        DateTime time = DateUtil.parse(now);
         CardUserBo cardUserBo = new CardUserBo();
         cardUserBo.setUserId(bo.getUserId());
         cardUserBo.setCardId(bo.getCardId());
-        cardUserBo.setExpiryTime(DateUtil.offsetDay(time, term));
+        // 发卡不写有效期: 卡自「首次预约使用」之日起算 term 天, 买来暂时不用不会过期
         boolean issued = cardUserService.insertByBo(cardUserBo);
 
         // 双人套餐(party_size>=2): 购买者额外获得一个好友兑换码, 同伴用自己的微信号兑换后同样发卡

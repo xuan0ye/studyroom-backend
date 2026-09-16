@@ -189,13 +189,13 @@ public class CardRedeemServiceImpl implements ICardRedeemService {
         if (vo.getOwnerUserId() != null && vo.getOwnerUserId().equals(userId)) {
             return fail(res, "不能兑换自己购买的兑换码，请把它发给同行好友");
         }
-        // 已持有同款未过期卡 → 不允许重复兑换(防刷)
+        // 已持有同款未过期卡(未激活也算持有) → 不允许重复兑换(防刷)
         List<CardUserVo> mine = cardUserService.queryListByUserId(userId);
         if (mine != null) {
             Date now = new Date();
             for (CardUserVo cu : mine) {
                 if (cu.getCardId() != null && cu.getCardId().equals(vo.getCardId())
-                    && cu.getExpiryTime() != null && cu.getExpiryTime().after(now)) {
+                    && (cu.getExpiryTime() == null || cu.getExpiryTime().after(now))) {
                     return fail(res, "你已持有该卡券且未过期，无需重复兑换");
                 }
             }
@@ -211,21 +211,19 @@ public class CardRedeemServiceImpl implements ICardRedeemService {
         if (rows <= 0) {
             return fail(res, "该兑换码已被使用，请核对");
         }
-        // 发卡: 有效期从兑换当天起算
+        // 发卡: 不写有效期, 自首次预约使用起算 term 天
         int term = vo.getTerm() == null ? 100 : vo.getTerm();
-        Date expiry = DateUtil.offsetDay(new Date(), term);
         CardUserBo cu = new CardUserBo();
         cu.setUserId(userId);
         cu.setCardId(vo.getCardId());
-        cu.setExpiryTime(expiry);
         if (!cardUserService.insertByBo(cu)) {
             throw new ServiceException("发卡失败，请联系客服处理");
         }
-        log.info("[双人卡] 兑换成功: code={}, 兑换人={}, 卡={}, 到期={}", c, userId, vo.getCardTitle(), expiry);
+        log.info("[双人卡] 兑换成功: code={}, 兑换人={}, 卡={}, 可用天数={}", c, userId, vo.getCardTitle(), term);
         res.put("success", true);
-        res.put("msg", "兑换成功！「" + (vo.getCardTitle() == null ? "卡券" : vo.getCardTitle()) + "」已发放到你的卡包，有效期至 " + fmt(expiry));
+        res.put("msg", "兑换成功！「" + (vo.getCardTitle() == null ? "卡券" : vo.getCardTitle())
+            + "」已发放到你的卡包，首次预约使用后 " + term + " 天内有效");
         res.put("cardTitle", vo.getCardTitle());
-        res.put("expiryTime", fmt(expiry));
         res.put("code", c);
         return res;
     }

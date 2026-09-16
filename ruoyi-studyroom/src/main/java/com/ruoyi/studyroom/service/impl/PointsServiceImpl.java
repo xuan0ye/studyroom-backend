@@ -177,12 +177,10 @@ public class PointsServiceImpl implements IPointsService {
             }
             // 消耗积分
             change(userId, -DAY_CARD_COST, 3, "积分商城兑换日卡");
-            // 发卡(有效期从今天起 term 天)
-            Date now = new Date();
+            // 发卡不写有效期: 自首次预约使用起算, 兑换后放着不用不会过期
             com.ruoyi.studyroom.domain.bo.CardUserBo cu = new com.ruoyi.studyroom.domain.bo.CardUserBo();
             cu.setUserId(userId);
             cu.setCardId(dayCard.getId());
-            cu.setExpiryTime(DateUtil.offsetDay(now, dayCard.getTerm() == null ? 1 : dayCard.getTerm().intValue()));
             boolean ok = cardUserService.insertByBo(cu);
             if (!ok) {
                 throw new ServiceException("发卡失败，请联系客服");
