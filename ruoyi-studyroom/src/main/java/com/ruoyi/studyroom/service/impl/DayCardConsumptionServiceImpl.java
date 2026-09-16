@@ -201,7 +201,19 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
         if (cardUser == null || !cardUser.getUserId().equals(bo.getUserId())) {
             throw new ServiceException("日卡不存在");
         }
-        // expiryTime 为空 = 买来还没用过: 不过期, 本次预约即为「首次使用」, 有效期从今天起算
+        // 该卡是否"真正用过": 存在未取消、未删除的消费记录(与前端卡包 consumed 口径完全一致)
+        // 取消预约/请假会把记录标记为 status=2, 所以"订了又取消"不算用过
+        boolean usedBefore = false;
+        List<CardUserVo> myCards = cardUserService.queryListByUserId(bo.getUserId());
+        if (myCards != null) {
+            for (CardUserVo cu : myCards) {
+                if (cu.getId() != null && cu.getId().equals(bo.getCardUserId())) {
+                    usedBefore = Boolean.TRUE.equals(cu.getConsumed());
+                    break;
+                }
+            }
+        }
+        // 从未真正用过的卡(买来一直没用、或预约都被取消): 不过期, 本次预约即为「首次使用」, 有效期从本次起算
         // 卡类型: term=1 日卡(单次), term=7 周卡(7天内每天可约), term>=30 长期卡(期限内每天可约)
         int cardTerm = 1;
         // selectVoById 不带 card 关联, 需单独查卡定义
@@ -213,16 +225,9 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
             cardTerm = cardDef.getTerm().intValue();
         }
         boolean isDailyCard = cardTerm <= 1;
-        // 日卡是否已被使用过(存在消费记录); 周卡/长期卡不按"用过一次就作废"处理
-        if (isDailyCard) {
-            DayCardConsumptionBo usedBo = new DayCardConsumptionBo();
-            usedBo.setCardUserId(bo.getCardUserId());
-            List<DayCardConsumptionVo> usedList = queryList(usedBo);
-            for (DayCardConsumptionVo d : usedList) {
-                if (d.getStatus() == null || d.getStatus() != 2) {
-                    throw new ServiceException("该日卡已使用，请选择其他日卡");
-                }
-            }
+        // 日卡用过一次即作废(周卡/长期卡按窗口/剩余天数结算)
+        if (isDailyCard && usedBefore) {
+            throw new ServiceException("该日卡已使用，请选择其他日卡");
         }
         // 自习室24小时营业: 预约覆盖全天 00:00 - 次日00:00
         Date nextDay = DateUtil.offsetDay(bookingDate, 1);
@@ -237,9 +242,12 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
         int lockDays;
         if (isLongTerm) {
             Integer remain = cardUser.getRemainingDays() == null ? term : cardUser.getRemainingDays();
-            // 上一连锁窗口自然结束(期间未停卡) => 视为该期已耗尽, 惰性清零
-            if (remain > 0 && cardUser.getLockEndTime() != null && cardUser.getLockSeatId() != null
+            if (!usedBefore) {
+                // 首次使用: 以卡面天数起算(防止历史数据里异常的剩余天数)
+                remain = Math.min(remain, term);
+            } else if (remain > 0 && cardUser.getLockEndTime() != null && cardUser.getLockSeatId() != null
                 && !cardUser.getLockEndTime().after(now)) {
+                // 上一连锁窗口自然结束(期间未停卡) => 视为该期已耗尽, 惰性清零
                 remain = 0;
                 CardUserBo remUpd = new CardUserBo();
                 remUpd.setId(cardUser.getId());
@@ -253,7 +261,7 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
         } else if (term >= 7) {
             // 周卡/双周卡等周期卡: 一次预约连锁整段周期, 窗口不得超过本卡剩余有效期
             lockDays = term;
-            if (cardUser.getExpiryTime() != null) {
+            if (usedBefore && cardUser.getExpiryTime() != null) {
                 long leftMs = DateUtil.beginOfDay(cardUser.getExpiryTime()).getTime() - bookingDate.getTime();
                 int left = (int) (leftMs / 86400000L);
                 if (left <= 0) {
@@ -266,17 +274,16 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
         } else {
             lockDays = 1;
         }
-        // 日/周卡: 已激活(用过)的卡, 预约开始日须仍在有效期内; 未激活的卡不设限
-        if (!isLongTerm && cardUser.getExpiryTime() != null) {
+        // 已用过的日/周卡: 预约开始日须仍在有效期内; 从未用过的卡不设限(本次即为首次使用)
+        if (!isLongTerm && usedBefore && cardUser.getExpiryTime() != null) {
             Date expiryDay = DateUtil.beginOfDay(cardUser.getExpiryTime());
             if (expiryDay.before(bookingDate)) {
                 throw new ServiceException("该卡在所选日期已失效，请更换卡券");
             }
         }
-        // 周期卡(周卡/双周卡): 锁座窗口已结束 => 本卡可使用天数已用完, 不允许再约
-        if (!isLongTerm && term >= 7 && cardUser.getLockSeatId() != null && cardUser.getLockEndTime() != null
-            && !cardUser.getLockEndTime().after(now)
-            && cardUser.getExpiryTime() != null) {
+        // 已用过的周期卡(周卡/双周卡): 锁座窗口已结束 => 本卡可使用天数已用完, 不允许再约
+        if (!isLongTerm && term >= 7 && usedBefore && cardUser.getLockSeatId() != null
+            && cardUser.getLockEndTime() != null && !cardUser.getLockEndTime().after(now)) {
             throw new ServiceException("该卡可使用天数已用完，如需继续请购买新卡或联系客服");
         }
         // 已在锁座中(当前窗口未结束)不可再次预约
@@ -351,8 +358,8 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
             cardUserBo.setLockEndTime(lockEnd);
             needUpdate = true;
         }
-        if (cardUser.getExpiryTime() == null) {
-            // 首次使用激活: 有效期 = 本次使用窗口结束日(日卡 1 天 / 周卡 7 天 / 长期卡按剩余天数)
+        if (cardUser.getExpiryTime() == null || !usedBefore) {
+            // 首次使用(或此前预约全部被取消、从未真正用上): 有效期从本次使用起算
             cardUserBo.setExpiryTime(lockEnd);
             needUpdate = true;
         } else if (isLongTerm) {
