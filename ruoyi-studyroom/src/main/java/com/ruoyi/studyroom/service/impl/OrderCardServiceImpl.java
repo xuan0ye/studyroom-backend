@@ -73,8 +73,30 @@ public class OrderCardServiceImpl implements IOrderCardService {
                 vo.setCardTerm(card.getTerm());
             }
         }
-        if (vo.getCreateTime() != null && vo.getCardTerm() != null) {
-            vo.setExpiryTime(DateUtil.offsetDay(vo.getCreateTime(), vo.getCardTerm().intValue()));
+        // 到期时间取"实际发放出去的那张卡"的到期日(新规则: 发卡不预设到期日,
+        // 未使用过就是空的 = 待使用, 客户首次预约才开始计算有效期, 后台不再按下单时间推算)
+        if (vo.getUserId() != null && vo.getCardId() != null) {
+            try {
+                java.util.List<com.ruoyi.studyroom.domain.vo.CardUserVo> mine =
+                    cardUserService.queryListByUserId(vo.getUserId());
+                com.ruoyi.studyroom.domain.vo.CardUserVo latest = null;
+                if (mine != null) {
+                    for (com.ruoyi.studyroom.domain.vo.CardUserVo cu : mine) {
+                        if (cu.getCardId() == null || !cu.getCardId().equals(vo.getCardId())) {
+                            continue;
+                        }
+                        if (latest == null || latest.getCreateTime() == null
+                            || (cu.getCreateTime() != null && cu.getCreateTime().after(latest.getCreateTime()))) {
+                            latest = cu;
+                        }
+                    }
+                }
+                if (latest != null) {
+                    vo.setExpiryTime(latest.getExpiryTime());
+                }
+            } catch (Exception e) {
+                log.warn("补全购卡到期时间失败 orderId={}", vo.getId(), e);
+            }
         }
     }
 
