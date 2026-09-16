@@ -31,11 +31,12 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             <result property="usable" column="usable"/>
             <result property="frequency" column="frequency"/>
             <result property="term" column="term"/>
+            <result property="cardType" column="card_type"/>
         </association>
     </resultMap>
     <select id="selectVoListByUserId" resultMap="CardUserLockResult">
         select
-        scu.id,scu.card_id, scu.user_id, sc.card_title, sc.price, sc.usable, sc.frequency, sc.term,scu.expiry_time,
+        scu.id,scu.card_id, scu.user_id, sc.card_title, sc.price, sc.usable, sc.frequency, sc.term, sc.card_type,scu.expiry_time,
         scu.lock_seat_id, scu.lock_start_time, scu.lock_end_time, scu.leave_count, scu.remaining_days, scu.create_time,
         (select count(*) from sr_day_card_consumption sdc where sdc.card_user_id = scu.id and sdc.status != 2 and (sdc.del_flag is null or sdc.del_flag = '0')) as consumed
         from sr_card_user scu

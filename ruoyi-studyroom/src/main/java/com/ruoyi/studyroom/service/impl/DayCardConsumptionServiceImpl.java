@@ -327,7 +327,22 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
         for (SeatRecordVo r : records) {
             if (r.getSeatId() != null && r.getSeatId().equals(bo.getSeatId())
                 && (r.getUserId() == null || !r.getUserId().equals(bo.getUserId()))) {
-                throw new ServiceException("该座位在所选时段已被他人预约");
+                // 报出具体冲突信息: 记录可能早于本次预约窗口(如门店长期锁座) => 改报"占用至"
+                String when;
+                if (r.getStartTime() != null && r.getStartTime().before(DateUtil.beginOfDay(bookingDate))) {
+                    String endLabel = r.getEndTime() == null ? "更晚"
+                        : cn.hutool.core.date.DateUtil.format(r.getEndTime(), "MM月dd日");
+                    when = "已被占用（占用至 " + endLabel + "）";
+                } else if (r.getStartTime() == null) {
+                    when = "在所选时段已被预约";
+                } else {
+                    when = "在 " + cn.hutool.core.date.DateUtil.format(r.getStartTime(), "MM月dd日") + " 已被预约";
+                }
+                if (lockDays > 1) {
+                    throw new ServiceException("该座位" + when + "；这张卡需要连续锁定 "
+                        + lockDays + " 天，请换一个座位或改用日卡");
+                }
+                throw new ServiceException("该座位" + when + "，请选择其它座位");
             }
         }
         // 写入日卡消费记录(首日)

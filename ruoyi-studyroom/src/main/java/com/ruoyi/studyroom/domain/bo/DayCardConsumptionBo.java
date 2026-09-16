@@ -55,6 +55,8 @@ public class DayCardConsumptionBo extends BaseEntity {
      * 消费日期
      */
     @ApiModelProperty(value = "消费日期")
+    @com.fasterxml.jackson.databind.annotation.JsonDeserialize(
+        using = com.ruoyi.studyroom.util.FlexibleDateDeserializer.class)
     private Date consumptionDate;
 
     /**
