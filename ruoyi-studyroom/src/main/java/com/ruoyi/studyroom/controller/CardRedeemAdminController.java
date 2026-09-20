@@ -76,6 +76,48 @@ public class CardRedeemAdminController extends BaseController {
         return R.ok(cardRedeemService.queryById(bo.getId()));
     }
 
+    @ApiOperation("批量生成通用兑换码(任意卡券, 不绑定购买者)")
+    @SaCheckPermission("studyroom:cardRedeem:generate")
+    @PostMapping("/batchGenerate")
+    public R<List<CardRedeemVo>> batchGenerate(@RequestBody CardRedeemBo bo) {
+        if (bo.getCardId() == null) {
+            throw new ServiceException("请选择卡券");
+        }
+        int count = bo.getCount() == null ? 1 : bo.getCount();
+        if (count < 1 || count > 200) {
+            throw new ServiceException("单次生成数量需在 1~200 之间");
+        }
+        CardVo card = cardService.queryById(bo.getCardId());
+        if (card == null) {
+            throw new ServiceException("卡券不存在");
+        }
+        if (card.getStatus() != null && card.getStatus() == 0) {
+            throw new ServiceException("该卡已停用，不能生成兑换码: " + card.getCardTitle());
+        }
+        int expireDays = bo.getExpireDays() == null || bo.getExpireDays() <= 0 ? 365 : bo.getExpireDays();
+        List<CardRedeemVo> out = new java.util.ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            CardRedeemBo one = new CardRedeemBo();
+            one.setCardId(card.getId());
+            one.setCardTitle(card.getCardTitle());
+            one.setPartySize(card.getPartySize());
+            // 兑换后卡的有效期: 不填则用卡面天数(日卡1天/周卡7天/月卡31天...)
+            one.setTerm(bo.getTerm() != null ? bo.getTerm()
+                : (card.getTerm() == null ? null : card.getTerm().intValue()));
+            // 通用兑换码不绑定购买者: owner_user_id 非空, 用 0 表示"后台生成"
+            one.setOwnerUserId(0L);
+            one.setOwnerNickname("后台生成");
+            one.setStatus(0);
+            one.setExpireTime(bo.getExpireTime() != null ? bo.getExpireTime()
+                : cn.hutool.core.date.DateUtil.offsetDay(new java.util.Date(), expireDays));
+            one.setRemark(com.ruoyi.common.utils.StringUtils.isBlank(bo.getRemark())
+                ? "后台批量生成" : bo.getRemark());
+            cardRedeemService.insertByBo(one);
+            out.add(cardRedeemService.queryById(one.getId()));
+        }
+        return R.ok(out);
+    }
+
     @ApiOperation("作废兑换码")
     @SaCheckPermission("studyroom:cardRedeem:edit")
     @PostMapping("/invalidate/{id}")

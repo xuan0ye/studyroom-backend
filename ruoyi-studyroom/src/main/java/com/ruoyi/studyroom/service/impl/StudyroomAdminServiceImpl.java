@@ -13,6 +13,8 @@ import com.ruoyi.studyroom.domain.CardUser;
 import com.ruoyi.studyroom.domain.Order;
 import com.ruoyi.studyroom.domain.SeatLock;
 import com.ruoyi.studyroom.domain.SeatRecord;
+import com.ruoyi.studyroom.domain.DayCardConsumption;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.ruoyi.studyroom.domain.bo.AdminCardGrantBo;
 import com.ruoyi.studyroom.domain.bo.AdminCardUpdateBo;
 import com.ruoyi.studyroom.domain.bo.AdminOccupyBo;
@@ -29,6 +31,7 @@ import com.ruoyi.studyroom.mapper.AccessProfileMapper;
 import com.ruoyi.studyroom.mapper.BalanceMapper;
 import com.ruoyi.studyroom.mapper.CardMapper;
 import com.ruoyi.studyroom.mapper.CardUserMapper;
+import com.ruoyi.studyroom.mapper.DayCardConsumptionMapper;
 import com.ruoyi.studyroom.mapper.OrderMapper;
 import com.ruoyi.studyroom.mapper.SeatLockMapper;
 import com.ruoyi.studyroom.mapper.SeatRecordMapper;
@@ -73,6 +76,7 @@ public class StudyroomAdminServiceImpl implements IStudyroomAdminService {
     private final BalanceMapper balanceMapper;
     private final CardMapper cardMapper;
     private final CardUserMapper cardUserMapper;
+    private final DayCardConsumptionMapper dayCardConsumptionMapper;
     private final OrderMapper orderMapper;
 
     // ==================== 代占座/锁座 ====================
@@ -298,18 +302,15 @@ public class StudyroomAdminServiceImpl implements IStudyroomAdminService {
             throw new ServiceException("该卡已停用, 不能发放: " + card.getCardTitle());
         }
 
-        Date now = new Date();
         Date expiry = bo.getExpiryTime();
-        if (expiry == null) {
-            // 缺省按卡的 term 天数计算
-            long term = card.getTerm() == null ? 30 : card.getTerm();
-            expiry = DateUtil.offsetDay(now, (int) term);
-        }
+        // 到期时间留空 = 不预设到期日: 与小程序新规则一致(客户首次预约使用时才开始计时, 买来放着不会过期)
 
         CardUserBo add = new CardUserBo();
         add.setUserId(bo.getUserId());
         add.setCardId(bo.getCardId());
-        add.setExpiryTime(expiry);
+        if (expiry != null) {
+            add.setExpiryTime(expiry);
+        }
         add.setLeaveCount(0);
         cardUserService.insertByBo(add);
         log.info("[后台运营] 发卡: 用户={} 卡={}({}) 到期={} 说明={}", bo.getUserId(), bo.getCardId(), card.getCardTitle(), expiry, bo.getReason());
@@ -343,5 +344,67 @@ public class StudyroomAdminServiceImpl implements IStudyroomAdminService {
         log.info("[后台运营] 修改卡: 记录={} 用户={} 新到期={} 新离开次数={} 说明={}",
             bo.getCardUserId(), vo.getUserId(), bo.getExpiryTime(), bo.getLeaveCount(), bo.getReason());
         return true;
+    }
+
+    // ==================== 删除会员卡券 ====================
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public String revokeCard(Long cardUserId, String reason) {
+        if (cardUserId == null) {
+            throw new ServiceException("删除卡券需要传入用户卡记录ID");
+        }
+        CardUserVo vo = cardUserService.queryById(cardUserId);
+        if (vo == null) {
+            throw new ServiceException("该卡券不存在或已被删除: " + cardUserId);
+        }
+        Card card = vo.getCardId() == null ? null : cardMapper.selectById(vo.getCardId());
+        String cardTitle = card == null ? ("卡" + vo.getCardId()) : card.getCardTitle();
+        Long userId = vo.getUserId();
+
+        // 1) 释放锁座: 删除该卡锁定期内尚未结束的座位占用 + 清空锁座字段
+        //    (不清理的话座位会一直被占着, 别人约不了 => 之前 3 号座位那种"孤儿占座")
+        int releasedSeats = 0;
+        if (vo.getLockSeatId() != null) {
+            Date now = new Date();
+            List<SeatRecord> records = seatRecordMapper.selectList(Wrappers.<SeatRecord>lambdaQuery()
+                .eq(SeatRecord::getSeatId, vo.getLockSeatId())
+                .eq(SeatRecord::getUserId, userId));
+            if (records != null) {
+                for (SeatRecord r : records) {
+                    if (r.getEndTime() == null || !r.getEndTime().before(now)) {
+                        seatRecordMapper.deleteById(r.getId());
+                        releasedSeats++;
+                    }
+                }
+            }
+            cardUserService.clearLockSeat(cardUserId);
+        }
+
+        // 2) 作废该卡未取消的预约记录(状态 2=已失效)
+        int invalidated = dayCardConsumptionMapper.update(null, Wrappers.<DayCardConsumption>lambdaUpdate()
+            .eq(DayCardConsumption::getCardUserId, cardUserId)
+            .ne(DayCardConsumption::getStatus, 2)
+            .set(DayCardConsumption::getStatus, 2));
+
+        // 3) 撤销门禁权限(失败不阻断删除)
+        try {
+            accessControlService.revokeAccessByOrder(null, userId, null);
+        } catch (Exception e) {
+            log.warn("[后台运营] 删除卡券时撤销门禁失败: cardUserId={}, userId={}", cardUserId, userId, e);
+        }
+
+        // 4) 删除卡券记录
+        cardUserMapper.deleteById(cardUserId);
+        log.info("[后台运营] 删除卡券: 记录={} 用户={} 卡={} 释放占座={} 作废预约={} 原因={}",
+            cardUserId, userId, cardTitle, releasedSeats, invalidated, reason);
+        StringBuilder msg = new StringBuilder("已删除「").append(cardTitle).append("」");
+        if (releasedSeats > 0) {
+            msg.append("，释放座位占用 ").append(releasedSeats).append(" 条");
+        }
+        if (invalidated > 0) {
+            msg.append("，作废预约记录 ").append(invalidated).append(" 条");
+        }
+        return msg.append("，门禁权限已同步撤销").toString();
     }
 }

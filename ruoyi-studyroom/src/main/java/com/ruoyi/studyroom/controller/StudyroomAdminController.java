@@ -79,6 +79,24 @@ public class StudyroomAdminController extends BaseController {
     }
 
     /**
+     * 删除会员卡券: 释放锁座/占座, 作废预约记录, 撤销门禁后删除卡券
+     */
+    @ApiOperation("删除会员卡券(含清理锁座/占座)")
+    @SaCheckPermission("studyroom:admin:card:revoke")
+    @Log(title = "删除会员卡券", businessType = BusinessType.DELETE)
+    @PostMapping("/card/revoke")
+    public R<String> revokeCard(@RequestBody java.util.Map<String, Object> body) {
+        Object idObj = body == null ? null : body.get("cardUserId");
+        if (idObj == null) {
+            return R.fail("请传入 cardUserId");
+        }
+        Long cardUserId = Long.valueOf(String.valueOf(idObj).trim());
+        Object reasonObj = body.get("reason");
+        String reason = reasonObj == null ? null : String.valueOf(reasonObj);
+        return R.ok(studyroomAdminService.revokeCard(cardUserId, reason));
+    }
+
+    /**
      * 特殊卡修改: 调整用户卡的到期时间/离开次数
      */
     @ApiOperation("特殊卡修改")

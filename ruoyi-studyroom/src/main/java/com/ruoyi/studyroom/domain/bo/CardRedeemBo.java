@@ -67,4 +67,10 @@ public class CardRedeemBo extends BaseEntity {
     @ApiModelProperty(value = "备注")
     private String remark;
 
+    @ApiModelProperty(value = "批量生成数量(1~200, 仅后台批量生成用)")
+    private Integer count;
+
+    @ApiModelProperty(value = "兑换码有效期天数(不填默认365天, 仅后台批量生成用)")
+    private Integer expireDays;
+
 }

@@ -53,4 +53,13 @@ public interface IStudyroomAdminService {
      * @return 是否成功
      */
     Boolean updateCard(AdminCardUpdateBo bo);
+
+    /**
+     * 删除会员卡券(后台): 释放锁座、删除未到期的座位占用、作废预约记录、撤销门禁权限后删除卡券
+     *
+     * @param cardUserId 用户卡记录ID(sr_card_user.id)
+     * @param reason     删除原因(记录日志)
+     * @return 处理结果说明
+     */
+    String revokeCard(Long cardUserId, String reason);
 }
