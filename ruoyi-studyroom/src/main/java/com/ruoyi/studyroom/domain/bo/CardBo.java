@@ -73,5 +73,17 @@ public class CardBo extends BaseEntity {
     @NotNull(message = "状态不能为空", groups = {AddGroup.class, EditGroup.class})
     private Integer status;
 
+    /**
+     * 固定使用起始日(与 validEnd 同时填写则为"固定区间卡": 只能在该区间内使用, 每天单独预约、不连锁锁座)
+     */
+    @ApiModelProperty(value = "固定使用起始日")
+    private java.util.Date validStart;
+
+    /**
+     * 固定使用截止日(含当天)
+     */
+    @ApiModelProperty(value = "固定使用截止日")
+    private java.util.Date validEnd;
+
 
 }

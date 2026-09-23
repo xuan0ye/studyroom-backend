@@ -88,4 +88,16 @@ public class CardVo {
     @ApiModelProperty("套餐人数")
     private Integer partySize;
 
+    /**
+     * 固定使用起始日(与 validEnd 同时存在时为"固定区间卡": 只能在区间内使用, 每天单独预约、不连锁锁座)
+     */
+    @ApiModelProperty("固定使用起始日")
+    private Date validStart;
+
+    /**
+     * 固定使用截止日(含当天)
+     */
+    @ApiModelProperty("固定使用截止日")
+    private Date validEnd;
+
 }

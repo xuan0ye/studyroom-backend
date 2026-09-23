@@ -67,4 +67,15 @@ public class Card extends BaseEntity {
      */
     private Integer partySize;
 
+    /**
+     * 固定使用起始日(与 validEnd 同时存在时为"固定区间卡": 只能在区间内使用, 且每天单独预约、不连锁锁座)
+     * 例如中秋国庆畅享券: 2026-09-25 ~ 2026-10-07
+     */
+    private Date validStart;
+
+    /**
+     * 固定使用截止日(含当天)
+     */
+    private Date validEnd;
+
 }
