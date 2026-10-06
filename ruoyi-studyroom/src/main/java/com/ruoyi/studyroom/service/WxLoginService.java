@@ -26,6 +26,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.servlet.http.HttpServletRequest;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * @ProjectName: study-room-vue
@@ -49,7 +51,14 @@ public class WxLoginService {
     @Value("${studyroom.dev.mock-login:false}")
     private boolean mockLoginEnabled;
 
-    public String wxLogin( String code) throws WxErrorException {
+    /**
+     * 微信小程序登录
+     *
+     * @param code 微信登录凭证
+     * @return token / userId / newUser(本次是否新注册账号, 供小程序弹"新人必读"引导)
+     * @throws WxErrorException 微信接口异常
+     */
+    public Map<String, Object> wxLogin( String code) throws WxErrorException {
         HttpServletRequest request = ServletUtils.getRequest();
         // code 为 小程序调用 wx.login 授权后获取
         // 校验 appid + appsrcret + xcxCode 调用登录凭证校验接口 获取 session_key 与 openid
@@ -65,6 +74,9 @@ public class WxLoginService {
             result = wxMaService.jsCode2SessionInfo(code);
         }
         String openid = result.getOpenid();
+        // 本次登录是否"新注册": openid 首次落库即为新用户
+        // (小程序据此弹新人引导: 体验卡联系客服领取 + 先录人脸再到店)
+        boolean newUser = ObjectUtil.isNull(userService.selectUserByOpenid(openid));
         User user = loadUserByOpenid(openid);
         // 此处可根据登录用户的数据不同 自行创建 loginUser
         XcxLoginUser loginUser = new XcxLoginUser();
@@ -78,7 +90,11 @@ public class WxLoginService {
 
         asyncService.recordLogininfor(user.getNickname(), Constants.LOGIN_SUCCESS, MessageUtils.message("user.login.success"), request);
 
-        return StpUtil.getTokenValue();
+        Map<String, Object> data = new LinkedHashMap<>(3);
+        data.put("token", StpUtil.getTokenValue());
+        data.put("userId", user.getUserId());
+        data.put("newUser", newUser);
+        return data;
     }
 
     /**

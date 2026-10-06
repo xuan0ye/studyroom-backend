@@ -42,13 +42,9 @@ public class LoginController extends BaseController {
     public R<Object> login(
         @ApiParam("微信用户临时登陆code") @NotBlank(message = "{xcx.code.not.blank}")
         @RequestParam String code) {
-        Map<String, Object> ajax = new HashMap<>(1);
-        String token;
         try {
-            token = loginService.wxLogin(code);
-            ajax.put("token", token);
-            // 同时返回 userId, 供前端存储后按 userId 匹配"我的排名"等
-            ajax.put("userId", LoginHelper.getUserId());
+            // 返回: token / userId / newUser(本次是否新注册, 小程序据此弹新人必读引导)
+            Map<String, Object> ajax = loginService.wxLogin(code);
             return R.ok(ajax);
         } catch (UserException e) {
             return R.fail(Integer.parseInt(UserStatus.DISABLE.getCode()),e.getMessage());
