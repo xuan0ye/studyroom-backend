@@ -45,3 +45,10 @@ nbdist/
 !*/build/*.html
 !*/build/*.xml
 .worktrees/
+
+######################################################################
+# 密钥 / 环境配置(不进版本控制, 推 GitHub 用; 本地文件保留, 编译部署不受影响)
+# 新机器 clone 后需要手动补上这三个: application-dev.yml / application-prod.yml / cert/
+ruoyi-admin/src/main/resources/application-dev.yml
+ruoyi-admin/src/main/resources/application-prod.yml
+ruoyi-admin/src/main/resources/cert/
