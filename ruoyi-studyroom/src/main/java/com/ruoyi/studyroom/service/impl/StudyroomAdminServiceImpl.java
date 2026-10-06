@@ -17,6 +17,7 @@ import com.ruoyi.studyroom.domain.DayCardConsumption;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.ruoyi.studyroom.domain.bo.AdminCardGrantBo;
 import com.ruoyi.studyroom.domain.bo.AdminCardUpdateBo;
+import com.ruoyi.studyroom.domain.bo.AdminLeaveGrantBo;
 import com.ruoyi.studyroom.domain.bo.AdminOccupyBo;
 import com.ruoyi.studyroom.domain.bo.AdminRefundBo;
 import com.ruoyi.studyroom.domain.bo.AdminRevokeBo;
@@ -312,6 +313,8 @@ public class StudyroomAdminServiceImpl implements IStudyroomAdminService {
             add.setExpiryTime(expiry);
         }
         add.setLeaveCount(0);
+        add.setLeaveQuota(bo.getLeaveQuota() == null || bo.getLeaveQuota() < 0
+            ? ICardUserService.DEFAULT_LEAVE_QUOTA : bo.getLeaveQuota());
         cardUserService.insertByBo(add);
         log.info("[后台运营] 发卡: 用户={} 卡={}({}) 到期={} 说明={}", bo.getUserId(), bo.getCardId(), card.getCardTitle(), expiry, bo.getReason());
         return true;
@@ -334,16 +337,54 @@ public class StudyroomAdminServiceImpl implements IStudyroomAdminService {
         if (bo.getExpiryTime() != null) {
             update.setExpiryTime(bo.getExpiryTime());
         }
-        if (bo.getLeaveCount() != null) {
-            update.setLeaveCount(bo.getLeaveCount());
+        if (bo.getLeaveQuota() != null) {
+            update.setLeaveQuota(bo.getLeaveQuota());
         }
-        if (update.getExpiryTime() == null && update.getLeaveCount() == null) {
+        if (bo.getLeaveQuotaAdd() != null && bo.getLeaveQuotaAdd() != 0) {
+            int base = vo.getLeaveQuota() == null ? ICardUserService.DEFAULT_LEAVE_QUOTA : vo.getLeaveQuota();
+            update.setLeaveQuota(Math.max(0, base + bo.getLeaveQuotaAdd()));
+        }
+        if (update.getExpiryTime() == null && update.getLeaveCount() == null && update.getLeaveQuota() == null) {
             throw new ServiceException("没有需要修改的内容");
         }
         cardUserMapper.updateById(update);
-        log.info("[后台运营] 修改卡: 记录={} 用户={} 新到期={} 新离开次数={} 说明={}",
-            bo.getCardUserId(), vo.getUserId(), bo.getExpiryTime(), bo.getLeaveCount(), bo.getReason());
+        log.info("[后台运营] 修改卡: 记录={} 用户={} 新到期={} 已请假={} 请假额度={} 说明={}",
+            bo.getCardUserId(), vo.getUserId(), bo.getExpiryTime(), bo.getLeaveCount(), update.getLeaveQuota(), bo.getReason());
         return true;
+    }
+
+    // ==================== 发放请假次数 ====================
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public String grantLeave(AdminLeaveGrantBo bo) {
+        if (bo == null || bo.getCardUserId() == null) {
+            throw new ServiceException("发放请假次数需要传入用户卡记录ID");
+        }
+        if (bo.getCount() == null || bo.getCount() <= 0) {
+            throw new ServiceException("追加次数必须为正整数");
+        }
+        if (bo.getCount() > 99) {
+            throw new ServiceException("单次追加次数不能超过 99");
+        }
+        CardUserVo vo = cardUserService.queryById(bo.getCardUserId());
+        if (vo == null) {
+            throw new ServiceException("用户卡记录不存在: " + bo.getCardUserId());
+        }
+        int base = vo.getLeaveQuota() == null ? ICardUserService.DEFAULT_LEAVE_QUOTA : vo.getLeaveQuota();
+        int used = vo.getLeaveCount() == null ? 0 : vo.getLeaveCount();
+        int newQuota = base + bo.getCount();
+        CardUser update = new CardUser();
+        update.setId(bo.getCardUserId());
+        update.setLeaveQuota(newQuota);
+        if (vo.getLeaveCount() == null) {
+            update.setLeaveCount(0);
+        }
+        cardUserMapper.updateById(update);
+        log.info("[后台运营] 发放请假次数: 记录={} 用户={} 原额度={} 追加={} 新额度={} 已用={} 说明={}",
+            bo.getCardUserId(), vo.getUserId(), base, bo.getCount(), newQuota, used, bo.getReason());
+        return "已发放请假次数 " + bo.getCount() + " 次，该卡当前额度 " + newQuota + " 次（已用 " + used + " 次，剩余 "
+            + Math.max(0, newQuota - used) + " 次）";
     }
 
     // ==================== 删除会员卡券 ====================

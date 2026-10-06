@@ -115,11 +115,37 @@ public interface IDayCardConsumptionService {
     boolean checkInByLightOn(Long seatId, Long userId);
 
     /**
+     * 门禁刷脸签到: 记用户当天首次**到店**(门口刷脸)时间。
+     *
+     * <p>取代开灯签到作为签到口径。理由: 人必须真的站在门口, 是最难伪造的到店信号;
+     * 而开灯依赖灯控链路(且可以被"到座位开个灯就走"糊弄)。</p>
+     *
+     * <p>只更新当天已存在的消费记录, <b>不新建</b> —— 新建会牵扯日卡扣次逻辑,
+     * 误操作代价太大。找不到记录时只记日志(便于发现并后续补处理)。已签到则保留更早的时间。</p>
+     *
+     * @param userId    用户ID
+     * @param eventTime 设备给出的通行时间(为空则用当前时间)
+     * @return 本次是否真的写入了签到
+     */
+    boolean checkInByDoor(Long userId, java.util.Date eventTime);
+
+    /**
      * 连续签到排行榜: 按连续签到天数降序
      *
      * @return 榜单(含 用户昵称/头像/连续天数/总签到天数)
      */
     List<Map<String, Object>> queryStreakRank();
+
+    /**
+     * 累计学习天数排行榜: 按累计签到天数降序。
+     *
+     * <p>取代原先的"学习时长榜"作为主榜。原因: 时长类指标要么鼓励"耗着不走"，
+     * 要么只反映"买下了多久"，都不等于真的来学习；
+     * 而<b>天数一天只可能 +1</b>，耗时间、开着灯不关都刷不出来，鼓励的是"天天来"。</p>
+     *
+     * @return 与 {@link #queryStreakRank()} 同源(同样的聚合口径)，只是排序换成按累计天数
+     */
+    List<Map<String, Object>> queryDaysRank();
 
     /**
      * 今日早到排行榜: 按当天首次开灯时间升序(谁先到谁靠前)

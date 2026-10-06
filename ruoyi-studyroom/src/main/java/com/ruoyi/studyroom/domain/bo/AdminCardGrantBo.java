@@ -41,4 +41,10 @@ public class AdminCardGrantBo {
      */
     @ApiModelProperty(value = "发放说明")
     private String reason;
+
+    /**
+     * 该卡的请假额度(不传=默认 3 次)
+     */
+    @ApiModelProperty(value = "请假额度(该卡总共可请假的次数, 默认3)")
+    private Integer leaveQuota;
 }

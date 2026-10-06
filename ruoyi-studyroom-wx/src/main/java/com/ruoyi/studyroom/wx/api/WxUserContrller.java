@@ -210,16 +210,51 @@ public class WxUserContrller extends BaseController {
 
     }
 
-    @ApiOperation("获取学习记录排行榜")
+    @ApiOperation("获取学习记录排行榜(按累计学习时长降序)")
     @GetMapping("/record")
-    public R<List<RecordVo>> record() {
+    public R<List<java.util.Map<String, Object>>> record() {
+        // 缓存里存的是原始 RecordVo(名字/头像嵌在 user 里), 这里统一拍平成与另外两个榜一致的形状
+        // {userId, hours, nickname, avatarUrl} —— 前端 rank.vue 三个标签共用同一套渲染逻辑。
+        // 不拍平的话, 页面上这个榜会全是空名字空头像。
+        List<RecordVo> raw;
         if (!RedisUtils.hasKey(Constants.RECORD_RANK)) {
-            List<RecordVo> list = recordService.queryDescList();
-            RedisUtils.setCacheList(Constants.RECORD_RANK, list);
-            RedisUtils.expire(Constants.RECORD_RANK,Constants.TIMEOUT);
-            return R.ok(list);
+            raw = recordService.queryDescList();
+            RedisUtils.setCacheList(Constants.RECORD_RANK, raw);
+            RedisUtils.expire(Constants.RECORD_RANK, Constants.TIMEOUT);
+        } else {
+            raw = RedisUtils.getCacheList(Constants.RECORD_RANK);
         }
-       return R.ok(RedisUtils.getCacheList(Constants.RECORD_RANK));
+        List<java.util.Map<String, Object>> out = new java.util.ArrayList<>();
+        if (raw != null) {
+            for (RecordVo r : raw) {
+                if (r == null) {
+                    continue;
+                }
+                double h = r.getHours() == null ? 0d : r.getHours();
+                if (h <= 0d) {
+                    // 没学习过的不上榜, 否则榜上会全是 0 小时占位
+                    continue;
+                }
+                java.util.Map<String, Object> m = new java.util.HashMap<>();
+                m.put("userId", r.getUserId());
+                m.put("hours", h);
+                if (r.getUser() != null) {
+                    m.put("nickname", r.getUser().getNickname());
+                    m.put("avatarUrl", r.getUser().getAvatarUrl());
+                }
+                out.add(m);
+                if (out.size() >= 100) {
+                    break;
+                }
+            }
+        }
+        return R.ok(out);
+    }
+
+    @ApiOperation("累计学习天数排行榜(按累计签到天数)")
+    @GetMapping("/record/days")
+    public R<List<java.util.Map<String, Object>>> daysRank() {
+        return R.ok(dayCardConsumptionService.queryDaysRank());
     }
 
     @ApiOperation("连续签到排行榜(按连续签到天数)")

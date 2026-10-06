@@ -22,6 +22,8 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         <result property="lockStartTime" column="lock_start_time"/>
         <result property="lockEndTime" column="lock_end_time"/>
         <result property="leaveCount" column="leave_count"/>
+        <result property="leaveQuota" column="leave_quota"/>
+        <result property="leaveRemain" column="leave_remain"/>
         <result property="remainingDays" column="remaining_days"/>
         <result property="consumed" column="consumed"/>
         <result property="createTime" column="create_time"/>
@@ -32,14 +34,16 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             <result property="frequency" column="frequency"/>
             <result property="term" column="term"/>
             <result property="cardType" column="card_type"/>
+            <result property="partySize" column="party_size"/>
             <result property="validStart" column="valid_start"/>
             <result property="validEnd" column="valid_end"/>
         </association>
     </resultMap>
     <select id="selectVoListByUserId" resultMap="CardUserLockResult">
         select
-        scu.id,scu.card_id, scu.user_id, sc.card_title, sc.price, sc.usable, sc.frequency, sc.term, sc.card_type, sc.valid_start, sc.valid_end,scu.expiry_time,
-        scu.lock_seat_id, scu.lock_start_time, scu.lock_end_time, scu.leave_count, scu.remaining_days, scu.create_time,
+        scu.id,scu.card_id, scu.user_id, sc.card_title, sc.price, sc.usable, sc.frequency, sc.term, sc.card_type, sc.party_size, sc.valid_start, sc.valid_end,scu.expiry_time,
+        scu.lock_seat_id, scu.lock_start_time, scu.lock_end_time, scu.leave_count, scu.leave_quota, scu.remaining_days, scu.create_time,
+        GREATEST(IFNULL(scu.leave_quota, 3) - IFNULL(scu.leave_count, 0), 0) AS leave_remain,
         (select count(*) from sr_day_card_consumption sdc where sdc.card_user_id = scu.id and sdc.status != 2 and (sdc.del_flag is null or sdc.del_flag = '0')) as consumed
         from sr_card_user scu
                      left join sr_card sc on scu.card_id = sc.id

@@ -28,7 +28,7 @@ import java.util.Enumeration;
 @Order(Integer.MIN_VALUE)
 public class DeviceProbeFilter extends OncePerRequestFilter {
 
-    private static final String[] PROBE_PATHS = {"/server", "/access", "/api/faceDeivce", "/api/faceDevice"};
+    private static final String[] PROBE_PATHS = {"/server", "/access", "/serve", "/api/faceDeivce", "/api/faceDevice"};
 
     private final JdbcTemplate jdbcTemplate;
 

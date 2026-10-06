@@ -94,6 +94,13 @@ public class CardUserServiceImpl implements ICardUserService {
                 }
             } catch (Exception ignore) { }
         }
+        // 请假额度缺省=3 次(后台可对单张卡追加)
+        if (add.getLeaveQuota() == null) {
+            add.setLeaveQuota(DEFAULT_LEAVE_QUOTA);
+        }
+        if (add.getLeaveCount() == null) {
+            add.setLeaveCount(0);
+        }
         validEntityBeforeSave(add);
         boolean flag = baseMapper.insert(add) > 0;
         if (flag) {

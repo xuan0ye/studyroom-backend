@@ -59,7 +59,25 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
     private final IBalanceService balanceService;
     private final IUserService userService;
     private final IAccessControlService accessControlService;
-    private final IPointsService pointsService;    /**
+    private final IPointsService pointsService;
+
+    /**
+     * 今日早到榜的起算小时(默认 6 点)。
+     *
+     * <p>页面文案承诺的是「今日 <b>6 点后</b>，谁先到谁先开灯」，但后端原先只按日期过滤，
+     * 于是凌晨 1:20 开灯的人拿了早到榜第一 —— 规矩写了没落实。这里补上真实过滤。</p>
+     */
+    @org.springframework.beans.factory.annotation.Value("${studyroom.rank.early-start-hour:6}")
+    private int earlyStartHour;
+
+    /**
+     * 开灯签到开关(默认关)。
+     *
+     * <p>签到口径已改为门禁刷脸到店。保留这个开关是为了"万一门禁推送不通能临时退回旧口径",
+     * 而<b>不是</b>让两种口径同时生效 —— 同时生效就会出现"开灯即签到", 等于没改。</p>
+     */
+    @org.springframework.beans.factory.annotation.Value("${studyroom.checkin.light-on-enabled:false}")
+    private boolean lightOnCheckInEnabled;    /**
      * 查询日卡消费记录
      *
      * @param id 日卡消费记录主键
@@ -480,11 +498,17 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
         if (vo.getStatus() != null && vo.getStatus() == 1) {
             throw new ServiceException("该预约已使用，无法取消");
         }
-        // ===== 防恶意占座(2026-09-12): 预约提交后3小时内可取消, 超过3小时不可取消 =====
-        if (vo.getCreateTime() != null) {
-            long elapsed = System.currentTimeMillis() - vo.getCreateTime().getTime();
-            if (elapsed > 3 * 60 * 60 * 1000L) {
-                throw new ServiceException("预约已超过3小时，无法取消。如确有特殊情况，请联系门店客服处理。");
+        // ===== 取消时间窗(2026-10-03 放宽): 未签到(状态0)且在预约当日 24:00 前均可取消 =====
+        // 旧规则是"下单后 3 小时内", 实际导致绝大多数用户根本取消不了;
+        // 已开灯签到(status=1)即视为已到店使用, 不允许再取消(防"用完再退");
+        // 长期卡(月卡/季卡)过了首日请用卡包里的「请假停卡 / 取消锁座」, 那才是它的正确入口。
+        if (vo.getStatus() != null && vo.getStatus() == 2) {
+            throw new ServiceException("该预约已失效，无需取消");
+        }
+        if (vo.getConsumptionDate() != null) {
+            Date bookingDayEnd = DateUtil.offsetDay(DateUtil.beginOfDay(vo.getConsumptionDate()), 1);
+            if (!new Date().before(bookingDayEnd)) {
+                throw new ServiceException("预约日期已过，无法直接取消。月卡/季卡等长期卡请到「我的 → 卡包」里请假停卡或取消锁座。");
             }
         }
         // 删除座位占用记录(该用户该座位当天)
@@ -566,14 +590,18 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
         }
         int term = (cardDef != null && cardDef.getTerm() != null) ? cardDef.getTerm().intValue() : 1;
         if (term < 30) {
-            throw new ServiceException("仅月卡/长期卡支持请假停卡");
+            throw new ServiceException("仅月卡/季卡等长期卡支持请假停卡");
         }
-        // 停卡不限次数: 剩余天数会冻结保存(见 freezeRemaining), 不浪费; leaveCount 仅作记录
+        // 请假额度校验: 每张卡默认 3 次(后台可单独追加), 用完需联系客服
         int leaveCount = cardUser.getLeaveCount() == null ? 0 : cardUser.getLeaveCount();
-        // 检查是否有锁座
+        int quota = cardUser.getLeaveQuota() == null ? ICardUserService.DEFAULT_LEAVE_QUOTA : cardUser.getLeaveQuota();
+        if (leaveCount >= quota) {
+            throw new ServiceException("该卡的请假次数已用完（共 " + quota + " 次）。如确有特殊原因，请联系门店客服为你追加请假次数。");
+        }
+        // 检查是否有锁座(只有正在用的卡才需要请假停卡)
         if (cardUser.getLockSeatId() == null || cardUser.getLockEndTime() == null
             || !cardUser.getLockEndTime().after(new Date())) {
-            throw new ServiceException("当前没有锁定的座位，无需请假");
+            throw new ServiceException("该卡当前没有正在使用的座位（尚未开始使用或已停卡），无需请假");
         }
         Long lockSeatId = cardUser.getLockSeatId();
         Date lockStart = cardUser.getLockStartTime();
@@ -624,7 +652,9 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
         }
         cardUserService.clearLockSeat(cardUser.getId());
         cardUserService.updateByBo(cardUserBo);
-        return "停卡成功：" + leftMsg + "（第 " + (leaveCount + 1) + " 次）";
+        int leftTimes = quota - (leaveCount + 1);
+        if (leftTimes < 0) leftTimes = 0;
+        return "请假成功：" + leftMsg + "（已请假 " + (leaveCount + 1) + "/" + quota + " 次，还可请假 " + leftTimes + " 次）";
     }
 
     /**
@@ -639,6 +669,13 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
         CardUserVo cardUser = cardUserService.queryById(cardUserId);
         if (cardUser == null || !cardUser.getUserId().equals(userId)) {
             throw new ServiceException("卡券不存在");
+        }
+        // 长期卡(月卡/季卡)只能走「请假停卡」:
+        // 两个入口对长期卡都会 freezeRemaining() + clearLockSeat() + 失效消费记录, 行为完全等价,
+        // 若同时开放, 用户点"取消锁座"即可免费达成请假的全部效果 => 请假次数形同虚设。
+        // 前端已隐藏该入口, 这里兜底防止直接调 /api/wx/daily/unlock 绕过额度。
+        if (isLongTermCard(cardUser)) {
+            throw new ServiceException("月卡/季卡等长期卡不支持取消锁座，请使用「请假停卡」（每张卡有请假次数限制）");
         }
         // 检查是否有锁座
         if (cardUser.getLockSeatId() == null || cardUser.getLockEndTime() == null
@@ -675,18 +712,56 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
                 }
             }
         }
-        // 长期卡停卡: 冻结剩余天数(防"连锁-取消-再连锁"无限白用)
-        if (isLongTermCard(cardUser)) {
-            freezeRemaining(cardUser);
-        }
-        // 清空卡锁座字段
+        // 长期卡已在上方拦截, 走到这里的只有周期卡(周卡/双周卡)。
+        // 周期卡的有效期由 expiryTime 决定, 不参与 remainingDays 冻结模型,
+        // 释放锁座后有效期照旧, 用户可直接重新预约。
         cardUserService.clearLockSeat(cardUser.getId());
-        if (isLongTermCard(cardUser)) {
-            CardUserVo refreshed = cardUserService.queryById(cardUserId);
-            int left = refreshed != null && refreshed.getRemainingDays() != null ? refreshed.getRemainingDays() : 0;
-            return "已停卡：剩余 " + left + " 天已冻结，可在「我的卡券」选日期续用";
-        }
         return "已取消锁座，座位已释放，可重新预约";
+    }
+
+    /**
+     * 门禁刷脸签到 (取代开灯签到)。
+     *
+     * <p>与 {@link #checkInByLightOn} 的关键区别:</p>
+     * <ul>
+     *   <li>不需要 seatId —— 人刚到门口, 可能还没落座;</li>
+     *   <li>时间用设备给的通行时间(更准), 设备没给才退回当前时间;</li>
+     *   <li><b>不新建记录</b>。新建会牵扯日卡扣次, 代价太大; 找不到当天记录只记日志。</li>
+     * </ul>
+     */
+    @Override
+    public boolean checkInByDoor(Long userId, Date eventTime) {
+        if (userId == null) {
+            return false;
+        }
+        Date today = DateUtil.beginOfDay(new Date());
+        Date tomorrow = DateUtil.offsetDay(today, 1);
+        DayCardConsumptionBo bo = new DayCardConsumptionBo();
+        bo.setUserId(userId);
+        for (DayCardConsumptionVo vo : queryList(bo)) {
+            if (vo.getConsumptionDate() == null
+                || vo.getConsumptionDate().before(today)
+                || !vo.getConsumptionDate().before(tomorrow)) {
+                continue;
+            }
+            Date when = eventTime != null ? eventTime : new Date();
+            // 已签到: 只在"新时间更早"时回填(保留当天最早的一次), 否则不动
+            if (vo.getCheckInTime() != null) {
+                if (!when.before(vo.getCheckInTime())) {
+                    return false;
+                }
+            }
+            DayCardConsumptionBo update = new DayCardConsumptionBo();
+            update.setId(vo.getId());
+            update.setCheckInTime(when);
+            update.setStatus(1); // 1-已使用
+            boolean ok = updateByBo(update);
+            log.info("[到店签到] 门禁刷脸签到 userId={} 时间={} 结果={}", userId, when, ok);
+            return ok;
+        }
+        // 当天还没有消费记录(例如还没开始计次的月卡): 不动数据, 但必须留痕, 便于发现口径缺口
+        log.warn("[到店签到] 门禁刷脸到店但当天无消费记录, 未签到 userId={} (如需支持请确认是否该新建记录)", userId);
+        return false;
     }
 
     /**
@@ -695,6 +770,12 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
      */
     @Override
     public boolean checkInByLightOn(Long seatId, Long userId) {
+        // 签到口径已改为"门禁刷脸到店"(见 checkInByDoor), 开灯不再作为签到依据 ——
+        // 开灯依赖灯控链路, 而且"到座位开个灯就走"也能糊弄过去; 门口刷脸则是人必须真的到场。
+        // 这里保留开关: 万一门禁推送不通, 把它打开即可临时退回旧口径。
+        if (!lightOnCheckInEnabled) {
+            return false;
+        }
         if (seatId == null || userId == null) return false;
         Date today = DateUtil.beginOfDay(new Date());
         Date tomorrow = DateUtil.offsetDay(today, 1);
@@ -753,20 +834,22 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
             java.util.Set<java.util.Date> days = new java.util.TreeSet<>(e.getValue());
             java.util.List<java.util.Date> sorted = new java.util.ArrayList<>(days);
             int streak = 0;
-            // 从今天(或最近签到日)往回数连续天数
-            java.util.Date today = DateUtil.beginOfDay(new Date());
-            java.util.Date cursor = today;
             if (sorted.isEmpty()) continue;
+            java.util.Date today = DateUtil.beginOfDay(new Date());
+            java.util.Date yesterday = DateUtil.offsetDay(today, -1);
             java.util.Date last = DateUtil.beginOfDay(sorted.get(sorted.size() - 1));
-            // 如果最后签到日早于昨天, 连续中断(从0开始); 若等于今天或昨天, 从该日往前数
-            if (last.before(DateUtil.offsetDay(today, -1))) {
-                cursor = last; // 中断了, 但仍显示从最后签到日开始的连续(通常为1)
-            }
-            java.util.Set<String> dayStrs = new java.util.HashSet<>();
-            for (java.util.Date d : sorted) dayStrs.add(DateUtil.formatDate(d));
-            while (dayStrs.contains(DateUtil.formatDate(cursor))) {
-                streak++;
-                cursor = DateUtil.offsetDay(cursor, -1);
+            // 只有"最后签到日是今天或昨天"才算连续仍在进行中。
+            // 原代码只在 last 早于昨天时才把游标挪到 last, 于是"昨天签了、今天还没开灯"会算出 0 天
+            // —— 可这恰恰是每天早上没到店时打开排行榜的常态, 等于天天把用户的连续天数清零。
+            // 更早(< 昨天)则连续确实中断, 连续天数如实记 0; 累计天数 totalDays 另行展示, 行不会空。
+            if (!last.before(yesterday)) {
+                java.util.Set<String> dayStrs = new java.util.HashSet<>();
+                for (java.util.Date d : sorted) dayStrs.add(DateUtil.formatDate(d));
+                java.util.Date cursor = last;
+                while (dayStrs.contains(DateUtil.formatDate(cursor))) {
+                    streak++;
+                    cursor = DateUtil.offsetDay(cursor, -1);
+                }
             }
             Map<String, Object> item = new java.util.HashMap<>();
             item.put("userId", e.getKey());
@@ -781,22 +864,59 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
     }
 
     /**
+     * 累计学习天数榜: 和连续签到榜<b>同源同聚合</b>, 只是换个排序口径。
+     *
+     * <p>复用 {@link #queryStreakRank()} 而不是重写一遍查询, 好处是两个标签页的数字永远一致 ——
+     * 否则同一份签到数据在两处算出不同的累计天数, 用户一眼就看出不对。</p>
+     */
+    @Override
+    public List<Map<String, Object>> queryDaysRank() {
+        List<Map<String, Object>> list = queryStreakRank();
+        list.sort((a, b) -> {
+            int tb = b.get("totalDays") == null ? 0 : (int) b.get("totalDays");
+            int ta = a.get("totalDays") == null ? 0 : (int) a.get("totalDays");
+            if (tb != ta) {
+                return Integer.compare(tb, ta);
+            }
+            // 累计天数相同时, 连续天数高的排前面(更自律)
+            int sb = b.get("streak") == null ? 0 : (int) b.get("streak");
+            int sa = a.get("streak") == null ? 0 : (int) a.get("streak");
+            return Integer.compare(sb, sa);
+        });
+        return list;
+    }
+
+    /**
      * 今日早到排行榜: 按当天首次开灯时间升序(谁先到谁靠前)
+     *
+     * <p><b>两处此前的缺陷已修</b>:</p>
+     * <ol>
+     *   <li>页面写的是「今日 6 点后」，但原查询只按日期过滤 -> 凌晨开灯也能拿第一。
+     *       现在真正加上 {@code check_in_time >= 今天 earlyStartHour 点} 的下限。</li>
+     *   <li>原代码用 {@code seen.add()} 声称"每人只算最早一次"，但查询没有排序，
+     *       实际取到的是数据库碰巧返回的第一行。现在显式 {@code order by check_in_time asc}，
+     *       取到的才真是当天第一次。</li>
+     * </ol>
      */
     @Override
     public List<Map<String, Object>> queryEarlyRank() {
         Date today = DateUtil.beginOfDay(new Date());
         Date tomorrow = DateUtil.offsetDay(today, 1);
+        // 起算时刻: 默认今天 06:00(可配 studyroom.rank.early-start-hour)
+        Date startAt = DateUtil.offsetHour(today, Math.max(0, earlyStartHour));
         LambdaQueryWrapper<DayCardConsumption> lqw = Wrappers.lambdaQuery();
         lqw.ge(DayCardConsumption::getConsumptionDate, today)
             .lt(DayCardConsumption::getConsumptionDate, tomorrow)
-            .isNotNull(DayCardConsumption::getCheckInTime);
+            .ge(DayCardConsumption::getCheckInTime, startAt)
+            .isNotNull(DayCardConsumption::getCheckInTime)
+            // 关键: 不排序的话 seen.add() 取到的是"碰巧第一行", 不是最早一次
+            .orderByAsc(DayCardConsumption::getCheckInTime);
         List<DayCardConsumption> all = baseMapper.selectList(lqw);
         java.util.List<Map<String, Object>> result = new java.util.ArrayList<>();
         java.util.Set<Long> seen = new java.util.HashSet<>();
         for (DayCardConsumption c : all) {
             if (c.getUserId() == null || c.getCheckInTime() == null) continue;
-            if (!seen.add(c.getUserId())) continue; // 每人只算最早一次
+            if (!seen.add(c.getUserId())) continue; // 已按时间升序, 取到的就是当天最早一次
             Map<String, Object> item = new java.util.HashMap<>();
             item.put("userId", c.getUserId());
             item.put("checkInTime", c.getCheckInTime());
@@ -804,7 +924,6 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
             item.put("avatarUrl", getAvatar(c.getUserId()));
             result.add(item);
         }
-        result.sort((a, b) -> ((java.util.Date) a.get("checkInTime")).compareTo((java.util.Date) b.get("checkInTime")));
         return result;
     }
 

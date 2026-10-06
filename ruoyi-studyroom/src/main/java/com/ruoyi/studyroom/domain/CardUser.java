@@ -57,9 +57,14 @@ public class CardUser extends BaseEntity {
     private Date lockEndTime;
 
     /**
-     * 已请假次数(月卡最多2次)
+     * 已请假次数
      */
     private Integer leaveCount;
+
+    /**
+     * 请假额度(该卡总共可请假的次数, 默认3, 后台可追加)
+     */
+    private Integer leaveQuota;
 
     /**
      * 长期卡剩余可用天数(停卡冻结/续启结算, 默认=卡term)

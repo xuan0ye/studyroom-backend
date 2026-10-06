@@ -42,3 +42,21 @@ export function delCardUser(id) {
     method: 'delete'
   })
 }
+
+// 发请假次数: 在用户卡原有请假额度上追加(每张长期卡默认 3 次)
+export function grantLeave(data) {
+  return request({
+    url: '/studyroom/admin/card/leave/grant',
+    method: 'post',
+    data: data
+  })
+}
+
+// 修改卡(到期时间 / 已请假次数 / 请假额度)
+export function updateAdminCard(data) {
+  return request({
+    url: '/studyroom/admin/card',
+    method: 'put',
+    data: data
+  })
+}

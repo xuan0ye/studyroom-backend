@@ -28,7 +28,7 @@ public class DeviceProbeController {
     private String probeResponse;
 
     @ApiOperation("设备协议探测 catch-all")
-    @RequestMapping(value = {"/server", "/server/**", "/access", "/access/**", "/api/faceDeivce/**", "/api/faceDevice/**"}, method = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS})
+    @RequestMapping(value = {"/server", "/server/**", "/access", "/access/**", "/serve", "/serve/**", "/api/faceDeivce/**", "/api/faceDevice/**"}, method = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS})
     public Map<String, Object> probe(HttpServletRequest request) {
         log.info("[PROBE-CONTROLLER] {} {}", request.getMethod(), request.getRequestURI());
         Map<String, Object> map = new HashMap<>();

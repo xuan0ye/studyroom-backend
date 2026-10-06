@@ -152,7 +152,7 @@ public class DailyController {
         }
     }
 
-    @ApiOperation("月卡请假停卡(释放座位+有效期顺延, 每张月卡限2次)")
+    @ApiOperation("月卡/季卡等长期卡请假停卡(释放座位+冻结剩余天数, 每张卡默认3次, 后台可追加)")
     @PostMapping("/leave")
     public R<String> leave(@RequestBody DayCardConsumptionBo bo) {
         try {

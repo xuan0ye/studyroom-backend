@@ -1,6 +1,7 @@
 package com.ruoyi.studyroom.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.R;
@@ -10,6 +11,7 @@ import com.ruoyi.studyroom.domain.bo.AdminRevokeBo;
 import com.ruoyi.studyroom.domain.bo.AdminRefundBo;
 import com.ruoyi.studyroom.domain.bo.AdminCardGrantBo;
 import com.ruoyi.studyroom.domain.bo.AdminCardUpdateBo;
+import com.ruoyi.studyroom.domain.bo.AdminLeaveGrantBo;
 import com.ruoyi.studyroom.service.IStudyroomAdminService;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
@@ -97,7 +99,7 @@ public class StudyroomAdminController extends BaseController {
     }
 
     /**
-     * 特殊卡修改: 调整用户卡的到期时间/离开次数
+     * 特殊卡修改: 调整用户卡的到期时间/已请假次数/请假额度
      */
     @ApiOperation("特殊卡修改")
     @SaCheckPermission("studyroom:admin:card:update")
@@ -105,5 +107,21 @@ public class StudyroomAdminController extends BaseController {
     @PutMapping("/card")
     public R<Void> updateCard(@Validated @RequestBody AdminCardUpdateBo bo) {
         return toAjax(studyroomAdminService.updateCard(bo));
+    }
+
+    /**
+     * 发放请假次数: 在用户卡原有请假额度上追加(每张长期卡默认 3 次)
+     * 权限上同时接受「运营-发卡」与「卡券管理-编辑」, 避免门店账号没配运营权限时用不了
+     */
+    @ApiOperation("发放请假次数")
+    @SaCheckPermission(value = {"studyroom:admin:card:update", "studyroom:cardUser:edit"}, mode = SaMode.OR)
+    @Log(title = "发放请假次数", businessType = BusinessType.UPDATE)
+    @PostMapping("/card/leave/grant")
+    public R<String> grantLeave(@Validated @RequestBody AdminLeaveGrantBo bo) {
+        try {
+            return R.ok(studyroomAdminService.grantLeave(bo));
+        } catch (com.ruoyi.common.exception.ServiceException e) {
+            return R.fail(e.getMessage());
+        }
     }
 }

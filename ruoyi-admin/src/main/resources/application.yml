@@ -51,6 +51,15 @@ logging:
   level:
     com.ruoyi: @logging.level@
     org.springframework: warn
+    # 门禁设备接入日志: 生产是 warn 级别, 若不单独放开, 设备连上/断开将完全看不见
+    com.ruoyi.studyroom.wx.ws: info
+    # MQTT 通道同理: 不放开就看不到"已订阅/下发/收到回包/探针"这些关键证据
+    com.ruoyi.studyroom.wx.mqtt: info
+    com.ruoyi.studyroom.wx.access: info
+    # 业务层: 人脸下发(publishRedactUser/enrollUser)的关键步骤都是 info ——
+    # 生产默认 warn 会让"下发为什么失败"完全无迹可查(排查时吃过这个亏)
+    com.ruoyi.studyroom.service: info
+    com.ruoyi.studyroom.controller: info
   config: classpath:logback.xml
 
 # Spring配置
@@ -131,17 +140,13 @@ security:
     - /**/*.js
     # 本地上传文件(轮播图等)
     - /upload/**
-    # swagger 文档配置
     - /favicon.ico
-    - /doc.html
-    - /swagger-resources/**
-    - /webjars/**
-    - /*/api-docs
-    # druid 监控配置
-    - /druid/**
-    # actuator 监控配置
-    - /actuator
-    - /actuator/**
+    # ===== 安全: 以下路径不再免鉴权放行 =====
+    # 原先放行 /doc.html、/swagger-resources/**、/webjars/**、/*/api-docs、/druid/**、/actuator(/**),
+    # 叠加 nginx `location /prod-api/ { proxy_pass .../ ; }` 会剥掉前缀,
+    # 导致外网可匿名访问 /prod-api/actuator/heapdump 等端点(曾实测可下载 158MB 堆转储,
+    # 内含明文 JWT 密钥/微信支付 APIv3 密钥/数据库密码)。由此处兜底鉴权。
+    # 注: /*.html 通配仍会匹配 /doc.html, 但 prod 下 swagger.enabled=false 已不提供该端点。
     - /api/wx/login
     - /api/wx/common/store
     - /api/wx/common/swiper
@@ -159,6 +164,10 @@ security:
     - /server/**
     - /access
     - /access/**
+    # 门禁厂商(叶飞)原服务器地址形态: 出厂指向 http://server.yefei***.com/serve/access,
+    # 设备把域名换成我们的后请求 /serve/**, 设备无登录态, 必须放行
+    - /serve
+    - /serve/**
 
 # MyBatisPlus配置
 # https://baomidou.com/config/
@@ -349,6 +358,11 @@ miot:
     app-key:
 
 studyroom:
+  # 排行榜规则
+  rank:
+    # 今日早到榜的起算小时(默认 6 点): 页面文案承诺"今日 6 点后谁先到谁先开灯",
+    # 而原实现只按日期过滤, 导致凌晨 1:20 开灯的人拿了早到榜第一。改这里即可调整门槛。
+    early-start-hour: ${STUDYROOM_RANK_EARLY_HOUR:6}
   # 米家灵动开关桥接(座位灯控制)
   miot:
     # 桥接脚本路径(服务器部署时改为服务器上的路径, 如 /opt/studyroom/tools/miot_bridge.py)
@@ -364,11 +378,28 @@ studyroom:
       webhook-url:
   access:
     mqtt:
+      # broker 内部地址(本机 mosquitto)
       host: tcp://127.0.0.1:1883
-      username:
-      password:
+      # 下发给设备的公网地址与端口: 设备据此连接, 必须是设备能访问到的地址
+      public-host: ${STUDYROOM_MQTT_PUBLIC_HOST:101.133.152.241}
+      public-port: ${STUDYROOM_MQTT_PUBLIC_PORT:1883}
+      username: ${STUDYROOM_MQTT_USERNAME:studyroom}
+      password: ${STUDYROOM_MQTT_PASSWORD:4McFjMfBMCtUoPNzgPpILfcA}
       pub-topic: face-device/sub
       sub-topic: face-device/pub
+    # 设备引导(GET/POST /server/access/): 厂商协议里设备靠它拿 MQTT 配置
+    bootstrap:
+      enabled: true
+      # 下发给设备的 HTTP API 根地址(指向我们, 设备对它的调用会被探针抓下来)
+      http-svr: https://api.dayousuoan.top/access/v1/
+      default-access-type: "0A05"
+      # 录脸二维码仍指向厂商(人脸数据还在其云上)
+      qr-url-template: https://access.yefiot.com/act?c=%s
+      # 《云端MQTT协议精简版 v1.12》的 /login 应答里下发的"记录上传基址":
+      # 设备会往 <这里>/upRecord、/upStrangerRecord、/upCapturet 发 HTTP POST。
+      # 用 http 而非 https: 文档示例是 http, 且避免设备不做 TLS。
+      record-url: ${STUDYROOM_ACCESS_RECORD_URL:http://api.dayousuoan.top/access/v1}
+      keepalive: 90
     redis:
       command-channel: studyroom:access:command
     bridge:

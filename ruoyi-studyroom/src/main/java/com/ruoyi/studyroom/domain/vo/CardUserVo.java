@@ -72,10 +72,22 @@ public class CardUserVo {
     private Date lockEndTime;
 
     /**
-     * 已请假次数(月卡最多2次)
+     * 已请假次数
      */
     @ApiModelProperty("已请假次数")
     private Integer leaveCount;
+
+    /**
+     * 请假额度(该卡总共可请假次数, 默认3, 后台可追加)
+     */
+    @ApiModelProperty("请假额度(该卡总共可请假次数)")
+    private Integer leaveQuota;
+
+    /**
+     * 剩余可请假次数(已用次数相对额度的余量, 仅展示用)
+     */
+    @ApiModelProperty("剩余可请假次数")
+    private Integer leaveRemain;
 
     /**
      * 长期卡剩余可用天数(未激活=term, 停卡后为冻结剩余)

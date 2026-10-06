@@ -66,6 +66,17 @@
             v-hasPermi="['studyroom:cardUser:export']"
         >导出</el-button>
       </el-col>
+      <el-col :span="1.5">
+        <el-button
+            type="primary"
+            plain
+            icon="el-icon-date"
+            size="mini"
+            :disabled="single"
+            @click="handleGrantLeave"
+            v-hasPermi="['studyroom:cardUser:edit']"
+        >发请假次数</el-button>
+      </el-col>
       <right-toolbar :showSearch.sync="showSearch" @queryTable="getList"></right-toolbar>
     </el-row>
 
@@ -74,8 +85,22 @@
               <el-table-column label="主键ID" align="center" prop="id" :show-overflow-tooltip="true" v-if="true"/>
               <el-table-column label="会员ID" align="center" prop="userId" min-width="100" :show-overflow-tooltip="true" />
               <el-table-column label="卡片ID" align="center" prop="cardId" min-width="100" :show-overflow-tooltip="true" />
-      <el-table-column label="操作" fixed="right" width="120" align="center" class-name="small-padding fixed-width">
+      <el-table-column label="到期时间" align="center" prop="expiryTime" min-width="150" :show-overflow-tooltip="true" />
+      <el-table-column label="请假(已用/额度)" align="center" min-width="130">
         <template slot-scope="scope">
+          <span>{{ (scope.row.leaveCount || 0) + " / " + (scope.row.leaveQuota == null ? 3 : scope.row.leaveQuota) }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="剩余天数" align="center" prop="remainingDays" min-width="90" />
+      <el-table-column label="操作" fixed="right" width="200" align="center" class-name="small-padding fixed-width">
+        <template slot-scope="scope">
+          <el-button
+              size="mini"
+              type="text"
+              icon="el-icon-date"
+              @click="handleGrantLeave(scope.row)"
+              v-hasPermi="['studyroom:cardUser:edit']"
+          >发请假次数</el-button>
           <el-button
               size="mini"
               type="text"
@@ -117,11 +142,36 @@
         <el-button @click="cancel">取 消</el-button>
       </div>
     </el-dialog>
+
+    <!-- 发放请假次数对话框 -->
+    <el-dialog :title="leaveTitle" :visible.sync="leaveOpen" width="500px" append-to-body>
+      <el-form ref="leaveForm" :model="leaveForm" :rules="leaveRules" label-width="110px">
+        <el-form-item label="卡券记录ID" prop="cardUserId">
+          <el-input v-model="leaveForm.cardUserId" disabled />
+        </el-form-item>
+        <el-form-item label="会员ID">
+          <el-input v-model="leaveForm.userId" disabled />
+        </el-form-item>
+        <el-form-item label="当前(已用/额度)">
+          <el-input :value="(leaveForm.leaveCount || 0) + ' / ' + (leaveForm.leaveQuota == null ? 3 : leaveForm.leaveQuota)" disabled />
+        </el-form-item>
+        <el-form-item label="追加次数" prop="count">
+          <el-input-number v-model="leaveForm.count" :min="1" :max="99" label="追加次数" />
+        </el-form-item>
+        <el-form-item label="发放说明" prop="reason">
+          <el-input v-model="leaveForm.reason" type="textarea" placeholder="如: 客户身体不适, 额外补 2 次请假" />
+        </el-form-item>
+      </el-form>
+      <div slot="footer" class="dialog-footer">
+        <el-button :loading="leaveLoading" type="primary" @click="submitGrantLeave">确 定</el-button>
+        <el-button @click="leaveOpen = false">取 消</el-button>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script>
-  import { listCardUser, getCardUser, delCardUser, addCardUser, updateCardUser } from "@/api/studyroom/cardUser";
+  import { listCardUser, getCardUser, delCardUser, addCardUser, updateCardUser, grantLeave } from "@/api/studyroom/cardUser";
 
   export default {
     name: "CardUser",
@@ -156,6 +206,23 @@
         },
         // 表单参数
         form: {},
+        // 发放请假次数: 遮罩开关
+        leaveOpen: false,
+        leaveLoading: false,
+        leaveTitle: "",
+        leaveForm: {
+          cardUserId: undefined,
+          userId: undefined,
+          leaveCount: 0,
+          leaveQuota: 3,
+          count: 1,
+          reason: undefined
+        },
+        leaveRules: {
+          count: [
+            { required: true, message: "追加次数不能为空", trigger: "blur" }
+          ]
+        },
         // 表单校验
         rules: {
                         id: [
@@ -279,6 +346,42 @@
     this.download('studyroom/cardUser/export', {
       ...this.queryParams
     }, `cardUser_${new Date().getTime()}.xlsx`)
+  },
+  /** 发请假次数按钮操作 */
+  handleGrantLeave(row) {
+    const target = row && row.id ? row : this.cardUserList.find(item => item.id === this.ids[0]);
+    if (!target || !target.id) {
+      this.$modal.msgError("请先选择一条卡券记录");
+      return;
+    }
+    this.leaveForm = {
+      cardUserId: target.id,
+      userId: target.userId,
+      leaveCount: target.leaveCount || 0,
+      leaveQuota: target.leaveQuota == null ? 3 : target.leaveQuota,
+      count: 1,
+      reason: undefined
+    };
+    this.leaveTitle = "发放请假次数（卡券记录 " + target.id + "）";
+    this.leaveOpen = true;
+  },
+  /** 提交发放请假次数 */
+  submitGrantLeave() {
+    this.$refs["leaveForm"].validate(valid => {
+      if (!valid) return;
+      this.leaveLoading = true;
+      grantLeave({
+        cardUserId: this.leaveForm.cardUserId,
+        count: this.leaveForm.count,
+        reason: this.leaveForm.reason
+      }).then(response => {
+        this.$modal.msgSuccess(response.msg || "发放成功");
+        this.leaveOpen = false;
+        this.getList();
+      }).catch(() => {}).finally(() => {
+        this.leaveLoading = false;
+      });
+    });
   }
   }
   };

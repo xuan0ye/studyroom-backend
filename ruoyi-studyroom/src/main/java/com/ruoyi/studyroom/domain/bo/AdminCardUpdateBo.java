@@ -30,10 +30,22 @@ public class AdminCardUpdateBo {
     private Date expiryTime;
 
     /**
-     * 新的离开次数(不传则不修改)
+     * 已请假次数(不传则不修改)
      */
-    @ApiModelProperty(value = "新的离开次数")
+    @ApiModelProperty(value = "已请假次数")
     private Integer leaveCount;
+
+    /**
+     * 请假额度: 该卡总共可请假的次数(不传则不修改)
+     */
+    @ApiModelProperty(value = "请假额度(该卡总共可请假的次数)")
+    private Integer leaveQuota;
+
+    /**
+     * 追加请假额度: 在原有额度上累加(不传则不修改)
+     */
+    @ApiModelProperty(value = "追加请假额度(在原有额度上累加)")
+    private Integer leaveQuotaAdd;
 
     /**
      * 修改说明

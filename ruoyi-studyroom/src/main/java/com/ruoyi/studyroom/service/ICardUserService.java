@@ -18,6 +18,11 @@ import java.util.List;
 public interface ICardUserService {
 
     /**
+     * 每张长期卡(月卡/季卡等)的默认请假额度: 3 次; 后台可单独为某张卡追加
+     */
+    int DEFAULT_LEAVE_QUOTA = 3;
+
+    /**
      * 查询优惠卡-会员关联
      *
      * @param id 优惠卡-会员关联主键

@@ -70,6 +70,23 @@ public class RedisUtils {
     }
 
     /**
+     * 发布通道消息, 并返回实际收到的订阅者数量
+     *
+     * <p><b>为什么需要它</b>: Redis Pub/Sub 是"即发即忘"——当通道没有任何订阅者时,
+     * 消息会被<b>静默丢弃</b>且不抛异常。{@link #publish} 把 Redisson 的返回值丢掉了,
+     * 调用方无法区分"已送达"与"没人接收", 于是把失败当成成功上报
+     * (门禁指令就曾因此长期显示"已同步/已下发"而设备什么都没收到)。</p>
+     *
+     * @param channelKey 通道key
+     * @param msg        发送数据
+     * @return 收到消息的订阅者数量; <b>0 表示无人接收, 消息已被丢弃</b>
+     */
+    public static <T> long publishAndGetReceivers(String channelKey, T msg) {
+        RTopic topic = CLIENT.getTopic(channelKey);
+        return topic.publish(msg);
+    }
+
+    /**
      * 订阅通道接收消息
      *
      * @param channelKey 通道key
