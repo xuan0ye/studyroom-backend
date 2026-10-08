@@ -76,6 +76,9 @@ public class CardServiceImpl implements ICardService {
         lqw.eq(bo.getFrequency() != null, Card::getFrequency, bo.getFrequency());
         lqw.eq(bo.getTerm() != null, Card::getTerm, bo.getTerm());
         lqw.eq(bo.getStatus() != null, Card::getStatus, bo.getStatus());
+        // 排序: 越小越靠前(0=最前); 同值按 id 升序保证顺序稳定(与 sr_promo 同口径)。
+        // 小程序卡券列表与后台卡券列表共用这个 wrapper, 所以两处顺序一致。
+        lqw.orderByAsc(Card::getSort).orderByAsc(Card::getId);
         return lqw;
     }
 

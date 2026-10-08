@@ -100,4 +100,10 @@ public class CardVo {
     @ApiModelProperty("固定使用截止日")
     private Date validEnd;
 
+    /**
+     * 排序: 越小越靠前(0=最前)
+     */
+    @ApiModelProperty("排序(越小越靠前)")
+    private Integer sort;
+
 }

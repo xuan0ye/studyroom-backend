@@ -53,6 +53,13 @@ public class Card extends BaseEntity {
     private Integer status;
 
     /**
+     * 排序: 越小越靠前(0=最前, 新建默认 0)
+     * <p>小程序卡券列表与后台卡券列表都按它排序, 与 sr_promo.sort 同口径。
+     * 同值时按 id 升序, 保证顺序稳定。</p>
+     */
+    private Integer sort;
+
+    /**
      * 区域限制: 0=不限区域 1=仅沉浸区(16-19号) 2=禁止沉浸区(16-19号)
      */
     private Integer cardType;

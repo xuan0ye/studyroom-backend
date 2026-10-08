@@ -74,6 +74,12 @@ public class CardBo extends BaseEntity {
     private Integer status;
 
     /**
+     * 排序: 越小越靠前(0=最前, 新建默认 0)
+     */
+    @ApiModelProperty(value = "排序(越小越靠前)")
+    private Integer sort;
+
+    /**
      * 固定使用起始日(与 validEnd 同时填写则为"固定区间卡": 只能在该区间内使用, 每天单独预约、不连锁锁座)
      */
     @ApiModelProperty(value = "固定使用起始日")
