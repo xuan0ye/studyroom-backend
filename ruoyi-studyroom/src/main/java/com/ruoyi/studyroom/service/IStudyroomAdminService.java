@@ -6,6 +6,7 @@ import com.ruoyi.studyroom.domain.bo.AdminLeaveGrantBo;
 import com.ruoyi.studyroom.domain.bo.AdminOccupyBo;
 import com.ruoyi.studyroom.domain.bo.AdminRefundBo;
 import com.ruoyi.studyroom.domain.bo.AdminRevokeBo;
+import com.ruoyi.studyroom.domain.bo.AdminSeatReleaseBo;
 
 /**
  * 自习室后台运营操作Service接口
@@ -30,6 +31,28 @@ public interface IStudyroomAdminService {
      * @return 是否成功
      */
     Boolean revoke(AdminRevokeBo bo);
+
+    /**
+     * 当前座位占用列表(未结束的占座记录 + 关联的锁座/卡锁座/日卡预约)
+     * <p>
+     * 给后台「释放座位」用: 先让管理员看见"这个座位是被什么占着", 再决定释放哪一个。
+     *
+     * @param roomId 自习室ID(可空 = 全部)
+     * @return 占用列表
+     */
+    java.util.List<com.ruoyi.studyroom.domain.vo.SeatOccupationVo> listOccupations(Long roomId);
+
+    /**
+     * 释放座位: 一次把"占着这个座位的东西"全部清掉 ——
+     * 删占座记录(座位图与预约占用检查读的就是它) + 取消锁座记录 + 解除卡锁座(可选)
+     * + 作废对应的日卡消费记录 + 撤销门禁权限(可选)。
+     * <p>
+     * 与原来的「撤销权限」区别: 撤销权限只把锁座置为已取消, 不删占座记录, 所以座位仍然被占。
+     *
+     * @param bo 请求(占座记录ID / 锁座记录ID / 用户ID 三选一)
+     * @return 处理结果(各项清理条数 + 说明)
+     */
+    java.util.Map<String, Object> releaseSeat(com.ruoyi.studyroom.domain.bo.AdminSeatReleaseBo bo);
 
     /**
      * 退款: 订单金额退回用户余额

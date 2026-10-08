@@ -48,7 +48,7 @@ public class StudyroomAdminController extends BaseController {
     }
 
     /**
-     * 撤销权限: 按锁座记录ID或用户ID撤销门禁授权
+     * 撤销权限: 按锁座记录ID或用户ID撤销门禁授权(同时清理未结束的占座记录)
      */
     @ApiOperation("撤销权限")
     @SaCheckPermission("studyroom:admin:revoke")
@@ -56,6 +56,28 @@ public class StudyroomAdminController extends BaseController {
     @PostMapping("/revoke")
     public R<Void> revoke(@Validated @RequestBody AdminRevokeBo bo) {
         return toAjax(studyroomAdminService.revoke(bo));
+    }
+
+    /**
+     * 当前座位占用列表: 未结束的占座记录 + 关联的锁座/卡锁座/日卡预约
+     */
+    @ApiOperation("当前座位占用列表")
+    @SaCheckPermission(value = {"studyroom:admin:revoke", "studyroom:admin:occupy"}, mode = SaMode.OR)
+    @GetMapping("/seat/occupations")
+    public R<java.util.List<com.ruoyi.studyroom.domain.vo.SeatOccupationVo>> seatOccupations(
+        @RequestParam(required = false) Long roomId) {
+        return R.ok(studyroomAdminService.listOccupations(roomId));
+    }
+
+    /**
+     * 释放座位: 删占座记录 + 取消锁座 + 解除卡锁座(可选) + 作废日卡消费 + 撤销门禁权限(可选)
+     */
+    @ApiOperation("释放座位")
+    @SaCheckPermission(value = {"studyroom:admin:revoke", "studyroom:admin:occupy"}, mode = SaMode.OR)
+    @Log(title = "释放座位", businessType = BusinessType.UPDATE)
+    @PostMapping("/seat/release")
+    public R<java.util.Map<String, Object>> releaseSeat(@RequestBody com.ruoyi.studyroom.domain.bo.AdminSeatReleaseBo bo) {
+        return R.ok(studyroomAdminService.releaseSeat(bo));
     }
 
     /**

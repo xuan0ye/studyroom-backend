@@ -21,6 +21,7 @@ import com.ruoyi.studyroom.domain.bo.AdminLeaveGrantBo;
 import com.ruoyi.studyroom.domain.bo.AdminOccupyBo;
 import com.ruoyi.studyroom.domain.bo.AdminRefundBo;
 import com.ruoyi.studyroom.domain.bo.AdminRevokeBo;
+import com.ruoyi.studyroom.domain.bo.AdminSeatReleaseBo;
 import com.ruoyi.studyroom.domain.bo.CardUserBo;
 import com.ruoyi.studyroom.domain.bo.SeatLockBo;
 import com.ruoyi.studyroom.domain.bo.SeatRecordBo;
@@ -28,6 +29,7 @@ import com.ruoyi.studyroom.domain.vo.BalanceVo;
 import com.ruoyi.studyroom.domain.vo.CardUserVo;
 import com.ruoyi.studyroom.domain.vo.OrderVo;
 import com.ruoyi.studyroom.domain.vo.SeatLockVo;
+import com.ruoyi.studyroom.domain.vo.SeatOccupationVo;
 import com.ruoyi.studyroom.mapper.AccessProfileMapper;
 import com.ruoyi.studyroom.mapper.BalanceMapper;
 import com.ruoyi.studyroom.mapper.CardMapper;
@@ -40,6 +42,7 @@ import com.ruoyi.studyroom.service.IAccessControlService;
 import com.ruoyi.studyroom.service.IBalanceService;
 import com.ruoyi.studyroom.service.ICardService;
 import com.ruoyi.studyroom.service.ICardUserService;
+import com.ruoyi.studyroom.service.IDayCardConsumptionService;
 import com.ruoyi.studyroom.service.IOrderService;
 import com.ruoyi.studyroom.service.ISeatLockService;
 import com.ruoyi.studyroom.service.ISeatRecordService;
@@ -51,8 +54,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 自习室后台运营操作Service实现
@@ -79,6 +86,8 @@ public class StudyroomAdminServiceImpl implements IStudyroomAdminService {
     private final CardUserMapper cardUserMapper;
     private final DayCardConsumptionMapper dayCardConsumptionMapper;
     private final OrderMapper orderMapper;
+    /** 释放座位时要解除卡的锁座(长期卡冻结剩余天数的逻辑在那边) */
+    private final IDayCardConsumptionService dayCardConsumptionService;
 
     // ==================== 代占座/锁座 ====================
 
@@ -189,18 +198,227 @@ public class StudyroomAdminServiceImpl implements IStudyroomAdminService {
         // 2.2 撤销门禁权限
         accessControlService.revokeAccessByOrder(null, userId, roomId);
 
-        // 2.3 该用户当日的占座记录(del_flag 逻辑删)
-        if (roomId == null) {
-            LambdaQueryWrapper<SeatRecord> recordWrapper = Wrappers.lambdaQuery();
-            recordWrapper.eq(SeatRecord::getUserId, userId);
-            List<SeatRecord> records = seatRecordMapper.selectList(recordWrapper);
-            for (SeatRecord r : records) {
-                seatRecordMapper.deleteById(r.getId());
-            }
-            log.info("[后台运营] 按用户清理占座记录: 用户={} 记录数={}", userId, records.size());
-        }
+        // 2.3 该用户"未结束"的占座记录 —— 撤销能不能真的把座位放出来, 全看这一步。
+        //     座位图与预约占用检查读的都是 sr_seat_record, 只把锁座置为已取消是不够的。
+        //     (2026-10-08 修: 原来只在 roomId 为空时才清理, 且不看时间范围会把历史记录也删掉)
+        int releasedRecords = deleteFutureSeatRecords(userId, null, roomId);
+        log.info("[后台运营] 按用户撤销并释放座位: 用户={} 占座记录清理={} 条", userId, releasedRecords);
 
         return true;
+    }
+
+    // ==================== 释放座位 ====================
+
+    @Override
+    public List<SeatOccupationVo> listOccupations(Long roomId) {
+        List<SeatOccupationVo> list = seatRecordMapper.selectOccupations(roomId);
+        if (list == null) {
+            return new ArrayList<>();
+        }
+        // 占用来源: 由关联数据判定, 让后台一眼看出"这个座位是被什么占着"
+        for (SeatOccupationVo vo : list) {
+            if (vo.getLockId() != null) {
+                vo.setSource("代占座/手动锁座");
+            } else if (vo.getCardUserId() != null) {
+                vo.setSource(StringUtils.isBlank(vo.getCardTitle()) ? "卡锁座" : ("卡锁座(" + vo.getCardTitle() + ")"));
+            } else if (vo.getConsumptionId() != null) {
+                vo.setSource("日卡预约");
+            } else {
+                vo.setSource("其它");
+            }
+        }
+        return list;
+    }
+
+    /**
+     * 取出该用户"未结束"的占座记录(end_time &gt; 现在)—— 只动还没有结束的占用, 历史记录保留。
+     */
+    private List<SeatRecord> pickFutureSeatRecords(Long userId, Long seatId, Long roomId) {
+        LambdaQueryWrapper<SeatRecord> rw = Wrappers.lambdaQuery();
+        rw.eq(SeatRecord::getUserId, userId)
+            .gt(SeatRecord::getEndTime, new Date())
+            .eq(seatId != null, SeatRecord::getSeatId, seatId)
+            .eq(roomId != null, SeatRecord::getRoomId, roomId)
+            .orderByAsc(SeatRecord::getStartTime);
+        return seatRecordMapper.selectList(rw);
+    }
+
+    /** 删除该用户"未结束"的占座记录, 返回删除条数 */
+    private int deleteFutureSeatRecords(Long userId, Long seatId, Long roomId) {
+        List<SeatRecord> records = pickFutureSeatRecords(userId, seatId, roomId);
+        if (records == null || records.isEmpty()) {
+            return 0;
+        }
+        List<Long> ids = new ArrayList<>();
+        for (SeatRecord r : records) {
+            ids.add(r.getId());
+        }
+        return seatRecordMapper.deleteBatchIds(ids);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> releaseSeat(AdminSeatReleaseBo bo) {
+        if (bo == null) {
+            throw new ServiceException("释放参数不完整");
+        }
+        String scope = StringUtils.isBlank(bo.getScope()) ? "seatUser" : bo.getScope();
+        Long userId = bo.getUserId();
+        Long seatId = bo.getSeatId();
+        Long roomId = bo.getRoomId();
+
+        // ---- 1. 定位目标: 占座记录 / 锁座记录 / 用户, 三选一 ----
+        if (bo.getSeatRecordId() != null) {
+            SeatRecord r = seatRecordMapper.selectById(bo.getSeatRecordId());
+            if (r == null) {
+                throw new ServiceException("占座记录不存在: " + bo.getSeatRecordId());
+            }
+            userId = r.getUserId();
+            seatId = r.getSeatId();
+            if (roomId == null) {
+                roomId = r.getRoomId();
+            }
+        } else if (bo.getLockId() != null) {
+            SeatLock lock = seatLockMapper.selectById(bo.getLockId());
+            if (lock == null) {
+                throw new ServiceException("锁座记录不存在: " + bo.getLockId());
+            }
+            userId = lock.getUserId();
+            seatId = lock.getSeatId();
+            if (roomId == null) {
+                roomId = lock.getRoomId();
+            }
+        }
+        if (userId == null) {
+            throw new ServiceException("释放参数不完整: 需要 占座记录ID / 锁座记录ID / 用户ID 之一");
+        }
+
+        // ---- 2. 选出要删的占座记录 ----
+        List<SeatRecord> records;
+        if ("record".equals(scope)) {
+            if (bo.getSeatRecordId() == null) {
+                throw new ServiceException("按单条释放时必须提供占座记录ID");
+            }
+            SeatRecord one = seatRecordMapper.selectById(bo.getSeatRecordId());
+            records = new ArrayList<>();
+            if (one != null) {
+                records.add(one);
+            }
+        } else {
+            records = pickFutureSeatRecords(userId, seatId, roomId);
+        }
+        // 记下覆盖的日期范围, 用于作废对应的日卡消费记录
+        Date minStart = null;
+        Date maxEnd = null;
+        List<Long> recordIds = new ArrayList<>();
+        for (SeatRecord r : records) {
+            recordIds.add(r.getId());
+            if (r.getStartTime() != null && (minStart == null || r.getStartTime().before(minStart))) {
+                minStart = r.getStartTime();
+            }
+            if (r.getEndTime() != null && (maxEnd == null || r.getEndTime().after(maxEnd))) {
+                maxEnd = r.getEndTime();
+            }
+        }
+
+        // ---- 3. 删占座记录(座位图/预约占用检查读的就是这张表, 删掉座位才真的空出来) ----
+        int recordsDeleted = 0;
+        if (!recordIds.isEmpty()) {
+            recordsDeleted = seatRecordMapper.deleteBatchIds(recordIds);
+        }
+
+        // ---- 4. 取消锁座记录(状态置 3=已取消) ----
+        int locksCancelled = 0;
+        LambdaQueryWrapper<SeatLock> lw = Wrappers.lambdaQuery();
+        lw.eq(SeatLock::getUserId, userId)
+            .in(SeatLock::getStatus, Arrays.asList(0, 1))
+            .eq(seatId != null, SeatLock::getSeatId, seatId)
+            .eq(roomId != null, SeatLock::getRoomId, roomId);
+        List<SeatLock> locks = seatLockMapper.selectList(lw);
+        List<Long> lockIds = new ArrayList<>();
+        for (SeatLock l : locks) {
+            lockIds.add(l.getId());
+        }
+        if (bo.getLockId() != null && !lockIds.contains(bo.getLockId())) {
+            lockIds.add(bo.getLockId());
+        }
+        if (!lockIds.isEmpty()) {
+            for (Long id : lockIds) {
+                SeatLockBo update = new SeatLockBo();
+                update.setId(id);
+                update.setStatus(3);
+                update.setUpdateTime(new Date());
+                seatLockService.updateByBo(update);
+                locksCancelled++;
+            }
+        }
+
+        // ---- 5. 解除卡锁座(可选): 长期卡会冻结剩余天数, 不占请假次数 ----
+        boolean clearCardLock = bo.getClearCardLock() == null || bo.getClearCardLock();
+        String cardMsg = null;
+        if (clearCardLock && seatId != null) {
+            List<CardUser> cards = cardUserMapper.selectList(Wrappers.<CardUser>lambdaQuery()
+                .eq(CardUser::getUserId, userId)
+                .eq(CardUser::getLockSeatId, seatId));
+            for (CardUser cu : cards) {
+                String msg = dayCardConsumptionService.releaseCardLockByAdmin(cu.getId());
+                if (StringUtils.isNotBlank(msg)) {
+                    cardMsg = msg;
+                }
+            }
+        }
+
+        // ---- 6. 作废对应的日卡消费记录(与小程序「取消预约」同口径: 该天不计入已用) ----
+        int consumptionsVoided = 0;
+        if (minStart != null && maxEnd != null) {
+            LambdaQueryWrapper<DayCardConsumption> cw = Wrappers.lambdaQuery();
+            cw.eq(DayCardConsumption::getUserId, userId)
+                .eq(seatId != null, DayCardConsumption::getSeatId, seatId)
+                .ne(DayCardConsumption::getStatus, 2)
+                .ge(DayCardConsumption::getConsumptionDate, DateUtil.beginOfDay(minStart))
+                .lt(DayCardConsumption::getConsumptionDate, DateUtil.beginOfDay(maxEnd));
+            List<DayCardConsumption> cons = dayCardConsumptionMapper.selectList(cw);
+            if (cons != null) {
+                for (DayCardConsumption d : cons) {
+                    dayCardConsumptionMapper.deleteById(d.getId());
+                }
+                consumptionsVoided = cons.size();
+            }
+        }
+
+        // ---- 7. 撤销门禁权限(可选) ----
+        boolean revokeAccess = bo.getRevokeAccess() == null || bo.getRevokeAccess();
+        boolean accessRevoked = false;
+        if (revokeAccess) {
+            try {
+                accessControlService.revokeAccessByOrder(null, userId, roomId);
+                accessRevoked = true;
+            } catch (Exception e) {
+                log.warn("[后台释放] 撤销门禁失败 userId={} roomId={}", userId, roomId, e);
+            }
+        }
+
+        StringBuilder msg = new StringBuilder("已释放座位: 删除占座记录 ").append(recordsDeleted).append(" 条")
+            .append(", 取消锁座 ").append(locksCancelled).append(" 条");
+        if (consumptionsVoided > 0) {
+            msg.append(", 作废日卡消费 ").append(consumptionsVoided).append(" 条");
+        }
+        if (cardMsg != null) {
+            msg.append(", ").append(cardMsg);
+        }
+        if (accessRevoked) {
+            msg.append(", 已撤销门禁");
+        }
+        log.info("[后台释放] 用户={} 座位={} 范围={} 原因={} -> {}", userId, seatId, scope, bo.getReason(), msg);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("recordsDeleted", recordsDeleted);
+        out.put("locksCancelled", locksCancelled);
+        out.put("consumptionsVoided", consumptionsVoided);
+        out.put("cardLockMessage", cardMsg);
+        out.put("accessRevoked", accessRevoked);
+        out.put("message", msg.toString());
+        return out;
     }
 
     // ==================== 退款 ====================

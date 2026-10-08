@@ -171,4 +171,16 @@ public interface IDayCardConsumptionService {
      * @return 取消锁座结果描述
      */
     String unlockByCard(Long cardUserId, Long userId);
+
+    /**
+     * 后台「释放座位」专用: 强制解除某张卡的锁座并清空锁座字段。
+     *
+     * <p>与用户端的「请假停卡 / 取消锁座」的区别是<b>不消耗请假次数</b>(后台的强制处置手段);
+     * 但长期卡(月卡/季卡)仍然会冻结剩余天数 —— 与「取消锁座」同一口径,
+     * 否则清掉锁座字段后下次预约会按卡面天数重新起算, 等于白送一个新周期。</p>
+     *
+     * @param cardUserId 卡用户ID(sr_card_user.id)
+     * @return 结果描述; 该卡本来就没锁座时返回 null
+     */
+    String releaseCardLockByAdmin(Long cardUserId);
 }

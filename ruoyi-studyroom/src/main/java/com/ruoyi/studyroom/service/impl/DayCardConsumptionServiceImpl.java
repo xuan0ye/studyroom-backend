@@ -947,6 +947,45 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
     }
 
     /**
+     * 后台「释放座位」专用: 强制解除某张卡的锁座并清空锁座字段。
+     *
+     * <p>与用户端「请假停卡 / 取消锁座」的区别: <b>不消耗请假次数</b>(后台强制处置)。
+     * 但长期卡(月卡/季卡)仍要冻结剩余天数 —— 与「取消锁座」同一口径,
+     * 否则清掉锁座字段后下次预约会按卡面天数重新起算, 等于白送一个新周期。</p>
+     *
+     * @param cardUserId 卡用户ID(sr_card_user.id)
+     * @return 结果描述; 该卡本来就没锁座时返回 null
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public String releaseCardLockByAdmin(Long cardUserId) {
+        if (cardUserId == null) {
+            return null;
+        }
+        CardUserVo cu = cardUserService.queryById(cardUserId);
+        if (cu == null || cu.getLockSeatId() == null) {
+            return null;
+        }
+        String cardName = null;
+        try {
+            com.ruoyi.studyroom.domain.vo.CardVo cv = cardService.queryById(cu.getCardId());
+            cardName = cv == null ? null : cv.getCardTitle();
+        } catch (Exception ignore) {
+        }
+        int paused = -1;
+        if (isLongTermCard(cu)) {
+            paused = freezeRemaining(cu);
+        }
+        cardUserService.clearLockSeat(cu.getId());
+        String msg = "已解除卡锁座「" + (cardName == null ? "卡" : cardName) + "」(座位 " + cu.getLockSeatId() + ")";
+        if (paused >= 0) {
+            msg += "，剩余 " + paused + " 天已冻结, 可在「我的卡券」选日期续用";
+        }
+        log.info("[后台释放] 强制解除卡锁座: cardUserId={} 卡={} -> {}", cardUserId, cardName, msg);
+        return msg;
+    }
+
+    /**
      * 头像值归一化: 数据库可能存裸 base64 或 data URI 截断残留(如 /9j/... 前导斜杠),
      * 统一补 data:image 前缀, 避免前端 image 组件把 base64 当 URL 加载报错
      */

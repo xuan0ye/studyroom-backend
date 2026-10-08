@@ -17,5 +17,54 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         <result property="updateTime" column="update_time"/>
     </resultMap>
 
+    <!--
+      后台「释放座位」列表: 未结束的座位占用 + 关联信息
+      一行 = 一条 sr_seat_record; 三组子查询分别带出
+        lock_id        手动锁座(后台代占座会写)
+        card_user_id   卡锁座(月卡/季卡等持卡人锁定的座位)
+        consumption_id 日卡预约(小程序下单)
+      后台据此显示"这个座位被什么占着", 并支持一键释放。
+    -->
+    <select id="selectOccupations" resultType="com.ruoyi.studyroom.domain.vo.SeatOccupationVo">
+        select
+            r.id                                as record_id,
+            r.user_id                           as user_id,
+            u.nickname                          as nickname,
+            u.phone                             as phone,
+            r.seat_id                           as seat_id,
+            s.seat_num                          as seat_num,
+            r.room_id                           as room_id,
+            r.start_time                        as start_time,
+            r.end_time                          as end_time,
+            timestampdiff(day, r.start_time, r.end_time) as days,
+            (select l.id from sr_seat_lock l
+              where l.user_id = r.user_id and l.seat_id = r.seat_id
+                and l.status in (0, 1) and (l.del_flag is null or l.del_flag = '0')
+              order by l.id desc limit 1)       as lock_id,
+            (select c.id from sr_card_user c
+              where c.user_id = r.user_id and c.lock_seat_id = r.seat_id
+              order by c.id desc limit 1)       as card_user_id,
+            (select c.card_id from sr_card_user c
+              where c.user_id = r.user_id and c.lock_seat_id = r.seat_id
+              order by c.id desc limit 1)       as card_id,
+            (select sc.card_title from sr_card_user c
+               left join sr_card sc on sc.id = c.card_id
+              where c.user_id = r.user_id and c.lock_seat_id = r.seat_id
+              order by c.id desc limit 1)       as card_title,
+            (select d.id from sr_day_card_consumption d
+              where d.user_id = r.user_id and d.seat_id = r.seat_id
+                and (d.del_flag is null or d.del_flag = '0') and d.status &lt;&gt; 2
+                and d.consumption_date &gt;= date_sub(date(r.start_time), interval 1 day)
+                and d.consumption_date &lt; date(r.end_time)
+              order by d.id desc limit 1)       as consumption_id
+        from sr_seat_record r
+                 left join sr_user u on u.user_id = r.user_id
+                 left join sr_seat s on s.seat_id = r.seat_id
+        where r.end_time &gt; now()
+        <if test="roomId != null">
+            and r.room_id = #{roomId}
+        </if>
+        order by r.start_time, s.seat_num
+    </select>
 
 </mapper>
