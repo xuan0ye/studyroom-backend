@@ -9,8 +9,12 @@ import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.common.utils.redis.RedisUtils;
 import com.ruoyi.studyroom.domain.AccessDevice;
+import com.ruoyi.studyroom.domain.AccessProfile;
 import com.ruoyi.studyroom.mapper.AccessDeviceMapper;
+import com.ruoyi.studyroom.mapper.AccessProfileMapper;
 import com.ruoyi.studyroom.service.IDeviceChannel;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
@@ -62,6 +66,8 @@ public class StudyroomDeviceAdminController extends BaseController {
 
     private final ObjectProvider<IDeviceChannel> deviceChannelProvider;
     private final AccessDeviceMapper accessDeviceMapper;
+    /** 删人脸时可选同步清空"我们库里的门禁档案", 让小程序显示未录、可以重新录 */
+    private final AccessProfileMapper accessProfileMapper;
 
     /** 镜像的 Redis key(存元数据 JSON 数组, 不含人脸图) */
     private static final String MIRROR_KEY = "studyroom:access:device:users:";
@@ -281,6 +287,122 @@ public class StudyroomDeviceAdminController extends BaseController {
             faceIdCache.remove(userId);
         }
         return ok ? R.ok() : R.fail("设备未确认删除(可能已不存在)");
+    }
+
+    /**
+     * 只删除某个人员的人脸, <b>人员保留</b>(账号、权限、其它信息都不动)。
+     *
+     * <p>与「删除人员」的区别: 那个会把整条人员从设备上删掉(刷不开门且账号消失), 这个只是把他的脸删了 ——
+     * 适合"脸录错了要重录"或"不再需要刷脸但账号还要留着"。</p>
+     *
+     * <p>可选 {@code clearProfile=true}(默认): 同时清空我们库里对应的门禁档案(jobnumber/人脸照片),
+     * 这样小程序会显示"未录人脸"、用户可以重新录 —— 否则客户以为录好了却刷不开门, 到店才发现。</p>
+     */
+    @ApiOperation("删除设备上的某张人脸(人员保留)")
+    @SaCheckPermission(value = {"studyroom:accessProfile:list", "studyroom:admin:occupy", "studyroom:cardUser:list"},
+        mode = SaMode.OR)
+    @Log(title = "删除门禁人脸", businessType = BusinessType.DELETE, isSaveResponseData = false)
+    @DeleteMapping("/face")
+    public R<String> deleteFace(@RequestParam String userId,
+                               @RequestParam(required = false) String sn,
+                               @RequestParam(required = false) Boolean clearProfile) {
+        IDeviceChannel ch = pickNativeChannel();
+        if (ch == null) {
+            return R.fail("门禁通道不可用");
+        }
+        String devSn = StringUtils.isNotBlank(sn) ? sn : firstDeviceSn();
+        if (StringUtils.isBlank(devSn)) {
+            return R.fail("未配置门禁设备");
+        }
+        boolean ok = ch.deleteDeviceFace(devSn, userId);
+        if (!ok) {
+            return R.fail("设备未确认删除人脸(该人员可能本来就没有人脸)");
+        }
+        // 进程内缓存与镜像同步: 删完列表立刻显示"未录", 不必等下次同步
+        faceImgCache.remove(userId);
+        faceIdCache.remove(userId);
+        updateMirrorFaceFlag(devSn, userId, false);
+
+        String extra = "";
+        if (clearProfile == null || clearProfile) {
+            extra = clearLocalProfile(devSn, userId);
+        }
+        return R.ok("已删除该人员的人脸(人员保留)" + (StringUtils.isBlank(extra) ? "" : ", " + extra));
+    }
+
+    /** 把镜像里该人员的"有人脸"标记改成 false(增量更新, 不重读设备) */
+    private void updateMirrorFaceFlag(String sn, String deviceUserId, boolean hasFace) {
+        try {
+            List<Map<String, Object>> list = readMirror(sn);
+            if (list == null) {
+                return;
+            }
+            boolean changed = false;
+            for (Map<String, Object> u : list) {
+                if (deviceUserId.equals(String.valueOf(u.get("userId")))) {
+                    u.put("hasFace", hasFace);
+                    if (!hasFace) {
+                        u.put("faceCount", 0);
+                    }
+                    changed = true;
+                }
+            }
+            if (changed) {
+                writeMirror(sn, list);
+            }
+        } catch (Exception e) {
+            log.warn("[门禁后台] 更新镜像人脸标记失败 sn={} uid={}: {}", sn, deviceUserId, e.getMessage());
+        }
+    }
+
+    /**
+     * 清空该设备人员在我们库里的门禁档案(jobnumber / 人脸照片 / 同步状态),
+     * 让小程序显示"未录人脸"、用户可重新录。
+     * <p>设备账号形如 {@code __sr<我们库的 userId>}, 据此反查; 厂商渠道录的人员我们库里没档案, 直接跳过。</p>
+     */
+    private String clearLocalProfile(String sn, String deviceUserId) {
+        try {
+            List<Map<String, Object>> list = readMirror(sn);
+            if (list == null) {
+                return "";
+            }
+            String acct = null;
+            for (Map<String, Object> u : list) {
+                if (deviceUserId.equals(String.valueOf(u.get("userId")))) {
+                    acct = str(u.get("userAcct"));
+                    break;
+                }
+            }
+            if (acct == null || !acct.startsWith("__sr")) {
+                return "";
+            }
+            long ourUserId;
+            try {
+                ourUserId = Long.parseLong(acct.substring(4));
+            } catch (Exception ignore) {
+                return "";
+            }
+            List<AccessProfile> profiles = accessProfileMapper.selectList(
+                Wrappers.<AccessProfile>lambdaQuery().eq(AccessProfile::getUserId, ourUserId));
+            if (profiles == null || profiles.isEmpty()) {
+                return "";
+            }
+            int n = 0;
+            for (AccessProfile p : profiles) {
+                LambdaUpdateWrapper<AccessProfile> uw = Wrappers.lambdaUpdate();
+                uw.eq(AccessProfile::getId, p.getId())
+                    .set(AccessProfile::getJobnumber, null)
+                    .set(AccessProfile::getFacePhotoUrl, null)
+                    .set(AccessProfile::getSyncStatus, 0);
+                accessProfileMapper.update(null, uw);
+                n++;
+            }
+            log.info("[门禁后台] 已清空门禁档案: 用户={} 档案数={}(删脸后小程序将显示未录)", ourUserId, n);
+            return "并清空该会员的门禁档案 " + n + " 条(小程序显示未录, 可重新录)";
+        } catch (Exception e) {
+            log.warn("[门禁后台] 清空本地门禁档案失败 uid={}: {}", deviceUserId, e.getMessage());
+            return "";
+        }
     }
 
     // ------------------------- 镜像读写 -------------------------

@@ -99,6 +99,18 @@ public interface IDeviceChannel {
     }
 
     /**
+     * 只删除设备上指定人员的人脸, <b>人员本身保留</b>(账号/权限不动)。
+     *
+     * <p>用途: 某人录错了脸、或不再需要刷脸进门, 但账号还要留着。
+     * 与 {@link #deleteDeviceUser} 的区别是后者会把整条人员删掉。</p>
+     *
+     * <p>设备实测报文: {@code {"action":"del_face","user_id":"139","data":[]}} → {@code {"data":[{"code":"0"}]}}(0=成功)。</p>
+     */
+    default boolean deleteDeviceFace(String sn, String deviceUserId) {
+        return false;
+    }
+
+    /**
      * 读取设备上的人脸(分页)。
      *
      * <p>实测报文: 请求 {@code {"action":"read_face","page":"1","size":"100","data":[]}},

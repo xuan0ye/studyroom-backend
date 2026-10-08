@@ -827,6 +827,29 @@ public class DeviceMqttChannel implements IDeviceChannel {
         return ok;
     }
 
+    /**
+     * 只删除人脸, 人员保留。
+     * <p>报文与"下发前清理旧人脸"完全一致(厂商 broker 实测 {@code code:"0"} 为成功)。</p>
+     */
+    @Override
+    public boolean deleteDeviceFace(String sn, String deviceUserId) {
+        if (StringUtils.isBlank(sn) || StringUtils.isBlank(deviceUserId)) {
+            return false;
+        }
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("action", "del_face");
+        p.put("sn", sn);
+        p.put("ts", String.valueOf(System.currentTimeMillis() / 1000));
+        p.put("user_id", deviceUserId);
+        p.put("data", new java.util.ArrayList<>());
+        Map<String, Object> r = sendAndAwait(sn, p, 15_000L);
+        String code = r == null ? null : str(r.get("deviceCode"));
+        boolean ok = "0".equals(code);
+        log.info("[门禁MQTT] 删除人脸(保留人员) sn={} user_id={} code={} -> {}",
+            sn, deviceUserId, code, ok ? "成功" : "失败");
+        return ok;
+    }
+
     /** 取回执 data[0] 里的字段(设备把 add_user 分配到的 user_id 放在这里) */
     static String firstField(Map<String, Object> ack, String field) {
         if (ack == null) {
