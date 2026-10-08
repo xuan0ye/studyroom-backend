@@ -75,15 +75,20 @@ public class DeviceMqttChannel implements IDeviceChannel {
     /**
      * cmd → 厂商 action 名映射(仅收录已在实机/厂商 broker 实测确认的名字)。
      *
-     * <p>{@code open_door} 已在我方设备上实测: 下发后设备以同一 serialno 回
-     * {@code {"action":"open_door","data":[{"code":"1"}]}}, 门禁动作被接受。
-     * 未确认的名字一律不生成 action 报文, 宁可不发也不发错。</p>
+     * <p>{@code open_door} 这个 action 名<b>不再下发</b>。理由(2026-10-08 更正):
+     * 厂商两版协议文档里, "远程开门"都是走 cs 协议的 cmd 报文 ——
+     * v1.11 第(五)节 {@code {"cmd":"openDoor","token","sn"}}, v1.12 第 11 节
+     * {@code {"cmd":"F1openDoor","token","sn"}} → 设备回 {@code {"cmd":"F1openDoor","result":0}}。
+     * 而 {@code action:"open_door"} 在厂商 broker 上只出现在<b>设备→App 方向</b>
+     * (带 {@code "to":"app"}、{@code code:"0"}), 是设备上报的"门已开"回执, 不是开门口令;
+     * 我方设备收它回 {@code code:"1"}。更麻烦的是它会被 {@link #normalizeAck} 翻译成 result,
+     * 抢在真正的 cs 回执之前唤醒等待方 —— 于是"门开了却报失败"或反之。所以直接从白名单移除。</p>
      */
     private static final Map<String, String> CMD_TO_ACTION;
     static {
         Map<String, String> m = new ConcurrentHashMap<>();
         // 键统一大写, 查找时对 cmd 做 toUpperCase。
-        m.put("F1OPENDOOR", "open_door");
+        // F1OPENDOOR 刻意不在表里: 开门的正确通道是 cs 协议的 cmd 报文(见类注释), 见上。
         // 只读探针(用来确认设备在线/建立 lastSeen, 不会产生任何物理动作)
         m.put("F1READPARAM", "read_param");
         CMD_TO_ACTION = Collections.unmodifiableMap(m);
@@ -613,16 +618,26 @@ public class DeviceMqttChannel implements IDeviceChannel {
     }
 
     /**
-     * 走厂商 action 协议的设备不支持服务器直接开门。
+     * 本通道支持服务器远程开门。
      *
-     * <p>实测: 我方设备收到 {@code {"action":"open_door",...}} 回 {@code code:"1"}(失败);
-     * 厂商 broker 上 {@code open_door} <b>只出现在设备→服务器/App 方向</b>, 且都带
-     * {@code "to":"app"}、{@code code:"0"} —— 那是设备回给 App 的"门已开"回执。
-     * App 的开门请求走的是厂商云端签名的 {@code {"code":"<不透明串>"}} 下发, 密钥在厂商手里。</p>
+     * <p><b>2026-10-08 更正</b>: 这里原先返回 false, 依据是一次"实测"—— 发
+     * {@code {"action":"open_door"}} 设备回 {@code code:"1"}。但那次用的是 <b>action 协议</b>,
+     * 而厂商两版文档里"远程开门"从来不是 action, 而是 <b>cs 协议的 cmd 报文</b>:</p>
+     * <ul>
+     *   <li>v1.11 第(五)节: 下发 {@code {"cmd":"openDoor","token":"xxx","sn":"..."}},
+     *       设备回 {@code {"cmd":"openDoor","result":0}};</li>
+     *   <li>v1.12 第 11 节: 下发 {@code {"cmd":"F1openDoor",...}}(其余同上);
+     *       并注明"设备开门成功后会再通过'开门记录上传'接口上传一条开门记录";</li>
+     *   <li>v1.11「开门记录上传」里 <b>开门类型 5 = 远程开门</b> —— 设备自己承认远程开门这一路径。</li>
+     * </ul>
+     * <p>我们这台设备本来就在用这条通道: 探针 {@code F1readParam} 走 {@code cs/<sn>/csmsg}
+     * 下发、设备有回包。{@link #sendAndAwait} 会把 {@code {cmd,sn,token}} 原样发到该主题,
+     * 回执带 {@code result} 时按 token/命令名唤醒等待方, 上层 {@code publish()} 判 {@code result==0}
+     * —— 所以"门真开了"才有成功, 超时/被拒一律如实报失败, 不会出现"提示成功但门没动"。
      */
     @Override
     public boolean supportsRemoteOpen() {
-        return false;
+        return true;
     }
 
     @Override
