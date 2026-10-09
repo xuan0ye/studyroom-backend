@@ -49,4 +49,17 @@ public interface IAccessControlService {
      * @return 本次处理数量
      */
     int compensateFailedRevokes();
+
+    /**
+     * 参观券到期 → 撤销门禁(删掉设备上的人脸)。
+     *
+     * <p>参观券的门禁窗口很短(默认 24 小时), 到期必须尽快删脸, 否则"参观完还能接着刷脸进来"。
+     * 只处理 ① 凭证来自参观券({@code visit:} 前缀)且已过期, ② 用户当前没有其它有效凭证
+     * (预约/新买的券) 的档案 —— 少一条都不删, 免得把人挡在门外。</p>
+     *
+     * <p>未配置参观券卡券 ID 时直接返回 0(功能关闭)。</p>
+     *
+     * @return 本次处理数量
+     */
+    int revokeExpiredVisitTickets();
 }

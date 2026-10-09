@@ -11,6 +11,7 @@ import com.ruoyi.studyroom.domain.AccessDevice;
 import com.ruoyi.studyroom.domain.AccessEventLog;
 import com.ruoyi.studyroom.domain.AccessProfile;
 import com.ruoyi.studyroom.domain.DayCardConsumption;
+import com.ruoyi.studyroom.domain.OrderCard;
 import com.ruoyi.studyroom.domain.bo.AccessDeviceLoginBo;
 import com.ruoyi.studyroom.domain.bo.AccessFaceUploadBo;
 import com.ruoyi.studyroom.domain.vo.AccessProfileVo;
@@ -20,6 +21,7 @@ import com.ruoyi.studyroom.mapper.AccessDeviceMapper;
 import com.ruoyi.studyroom.mapper.AccessEventLogMapper;
 import com.ruoyi.studyroom.mapper.AccessProfileMapper;
 import com.ruoyi.studyroom.mapper.DayCardConsumptionMapper;
+import com.ruoyi.studyroom.mapper.OrderCardMapper;
 import com.ruoyi.studyroom.service.IAccessControlService;
 import com.ruoyi.studyroom.service.IDayCardConsumptionService;
 import com.ruoyi.studyroom.service.IDeviceChannel;
@@ -53,11 +55,19 @@ public class AccessControlServiceImpl implements IAccessControlService {
     private static final int REVOKE_STATUS_DONE = 1;
     private static final int REVOKE_STATUS_WAIT_RETRY = 2;
 
+    /**
+     * 参观券来源的门禁档案标记: 档案的 {@code orderId} 写成 {@code visit:<购卡订单号>}。
+     * 这是后面区分"这张档案来自参观券还是预约"的唯一依据, 别改前缀。
+     */
+    private static final String VISIT_ORDER_PREFIX = "visit:";
+
     private final DayCardConsumptionMapper dayCardConsumptionMapper;
     private final ISeatService seatService;
     private final AccessDeviceMapper accessDeviceMapper;
     private final AccessProfileMapper accessProfileMapper;
     private final AccessEventLogMapper accessEventLogMapper;
+    /** 购卡订单: 判断"参观券"是否还在有效窗口内(见 findActiveVisitTicket) */
+    private final OrderCardMapper orderCardMapper;
     /**
      * 门禁设备实时通道(WebSocket 实现)。用 ObjectProvider 延迟获取,
      * 避免与 ruoyi-studyroom-wx 中的实现类形成构造期循环依赖。
@@ -152,6 +162,125 @@ public class AccessControlServiceImpl implements IAccessControlService {
     @Value("${studyroom.door.mqtt-open-enabled:false}")
     private boolean doorMqttOpenEnabled;
 
+    // ==================== 参观券(2026-10-09) ====================
+    // 由来: 门口常有路人想进去看看, 但屏幕/二维码扫完就被推到付款页 —— 漏斗第一步就断了。
+    // 参观券把"买一张券"变成进门凭证: 买完即可录脸、不预约也能刷脸进店, 券到期自动删脸。
+
+    /** 参观券用的卡券 ID(后台「卡券管理」里那张参观券的 id)。<b>0 = 该功能关闭(默认)</b> */
+    @Value("${studyroom.access.visit-card-id:0}")
+    private Long visitCardId;
+
+    /**
+     * 参观券的门禁窗口(小时), 从<b>支付成功时刻</b>起算。
+     *
+     * <p>为什么不复用卡自带的 term: {@code OrderCardServiceImpl#updateByBoAndCard} 明确"发卡不写有效期",
+     * 卡的 term 是从"首次预约使用"起算的 —— 参观券没有预约, 用不上那套。
+     * 所以这里自己算窗口, 到期由 {@link #revokeExpiredVisitTickets()} 删掉设备上的人脸。</p>
+     */
+    @Value("${studyroom.access.visit-ticket-hours:24}")
+    private int visitTicketHours;
+
+    /** 门店默认自习室 ID(参观券没有座位, 用它兜底定位门禁设备)。0 = 自动: 库里只有一台设备时用它那间 */
+    @Value("${studyroom.access.default-room-id:0}")
+    private Long defaultRoomId;
+
+    /** 参观券功能是否启用 —— 没配卡券 ID 就整条链路不生效(默认) */
+    private boolean visitTicketEnabled() {
+        return visitCardId != null && visitCardId > 0;
+    }
+
+    /**
+     * 自习室定位兜底: 参观券没有座位, 也就没有"座位 → 自习室"这条链, 否则找不到门禁设备。
+     * 顺序: 传入的值 → 配置的门店默认自习室 → 库里唯一那台门禁设备所属自习室。
+     */
+    private Long resolveRoomId(Long roomId) {
+        if (roomId != null) {
+            return roomId;
+        }
+        if (defaultRoomId != null && defaultRoomId > 0) {
+            return defaultRoomId;
+        }
+        AccessDevice d = firstAccessDevice();
+        return d == null ? null : d.getRoomId();
+    }
+
+    /**
+     * 查"当前有效的参观券"(已支付 且 在窗口内), 返回与预约同形状的凭证, 让上层逻辑复用。
+     *
+     * <p>返回的 {@code orderId} 形如 {@code visit:<购卡订单号>}, 见 {@link #VISIT_ORDER_PREFIX}。</p>
+     */
+    private OrderVo findActiveVisitTicket(Long userId) {
+        if (userId == null || !visitTicketEnabled()) {
+            return null;
+        }
+        Date from = cn.hutool.core.date.DateUtil.offsetHour(new Date(), -Math.max(1, visitTicketHours));
+        LambdaQueryWrapper<OrderCard> lqw = Wrappers.lambdaQuery();
+        lqw.eq(OrderCard::getUserId, userId)
+            .eq(OrderCard::getCardId, visitCardId)
+            .eq(OrderCard::getPayStatus, com.ruoyi.common.constant.PayConstants.PAID)
+            .ge(OrderCard::getCreateTime, from)
+            .orderByDesc(OrderCard::getCreateTime)
+            .last("limit 1");
+        OrderCard oc;
+        try {
+            oc = orderCardMapper.selectOne(lqw);
+        } catch (Exception e) {
+            log.warn("[门禁] 查询参观券失败 userId={}: {}", userId, e.getMessage());
+            return null;
+        }
+        if (oc == null) {
+            return null;
+        }
+        OrderVo vo = new OrderVo();
+        vo.setOrderId(VISIT_ORDER_PREFIX + oc.getOrderId());
+        vo.setUserId(userId);
+        vo.setRoomId(resolveRoomId(null));
+        vo.setStartTime(oc.getCreateTime());
+        vo.setEndTime(cn.hutool.core.date.DateUtil.offsetHour(oc.getCreateTime(), visitTicketHours));
+        vo.setOrderStatus("ACTIVE");
+        return vo;
+    }
+
+    /**
+     * 参观券到期 → 撤销门禁(删掉设备上的人脸/人员)。
+     *
+     * <p>两个条件都成立才删, 少一个都不删:</p>
+     * <ol>
+     *   <li>该档案的凭证确实是参观券({@code visit:} 前缀)且已过期;</li>
+     *   <li>该用户此刻<b>没有</b>其它有效凭证(预约 或 新买的券) —— 否则会把正在用的权限删掉,
+     *       把人挡在门外。</li>
+     * </ol>
+     *
+     * @return 本轮处理数量
+     */
+    @Override
+    public int revokeExpiredVisitTickets() {
+        if (!visitTicketEnabled()) {
+            return 0;
+        }
+        long nowSec = System.currentTimeMillis() / 1000;
+        LambdaQueryWrapper<AccessProfile> lqw = Wrappers.lambdaQuery();
+        lqw.likeRight(AccessProfile::getOrderId, VISIT_ORDER_PREFIX)
+            .isNotNull(AccessProfile::getValidity)
+            .lt(AccessProfile::getValidity, nowSec)
+            .ne(AccessProfile::getRevokeStatus, REVOKE_STATUS_DONE)
+            .last("limit 100");
+        int affected = 0;
+        for (AccessProfile profile : accessProfileMapper.selectList(lqw)) {
+            if (profile.getJobnumber() == null) {
+                continue;
+            }
+            if (queryCurrentOrFutureOrder(profile.getUserId()) != null
+                || findActiveVisitTicket(profile.getUserId()) != null) {
+                continue;
+            }
+            log.info("[门禁] 参观券已到期, 撤销门禁权限: userId={} orderId={}", profile.getUserId(), profile.getOrderId());
+            revokeAccessByOrder(profile.getOrderId(), profile.getUserId(), profile.getRoomId());
+            affected++;
+        }
+        return affected;
+    }
+
     /**
      * 开门专用 RestTemplate(带超时)。
      * 继电器不在线时不能把用户的开门请求拖死 —— 所以单独一个, 不动共用的那个。
@@ -178,12 +307,20 @@ public class AccessControlServiceImpl implements IAccessControlService {
         if (StringUtils.isNotBlank(base64) && base64.length() > 300000) {
             throw new ServiceException("照片过大，请压缩后重试");
         }
-        // 录脸门槛: 当天有预约, 或未来已有预约(解决"想明天来、今天先录脸"的鸡生蛋问题)
+        // 录脸门槛: 当天/未来有预约, 或 持有有效的参观券(2026-10-09 新增: 买券即可录脸进门)。
+        // 这层门槛不能整个删掉 —— 那样任何登录用户都能录脸开锁, 等于给所有人发钥匙。
         OrderVo activeOrder = queryCurrentOrFutureOrder(userId);
         if (activeOrder == null) {
-            throw new ServiceException("你还没有预约记录，请先预约座位再开通门禁");
+            activeOrder = findActiveVisitTicket(userId);
+        }
+        if (activeOrder == null) {
+            throw new ServiceException(visitTicketEnabled()
+                ? "你还没有预约记录，请先预约座位，或购买「参观券」后即可开通门禁"
+                : "你还没有预约记录，请先预约座位再开通门禁");
         }
         Long roomId = bo.getRoomId() == null ? activeOrder.getRoomId() : bo.getRoomId();
+        // 参观券没有座位 → "座位 → 自习室"这条链是断的, 用门店默认自习室兜底
+        roomId = resolveRoomId(roomId);
         if (roomId != null && activeOrder.getRoomId() != null && !roomId.equals(activeOrder.getRoomId())) {
             throw new ServiceException("仅允许给当前预约自习室上传门禁照片");
         }
