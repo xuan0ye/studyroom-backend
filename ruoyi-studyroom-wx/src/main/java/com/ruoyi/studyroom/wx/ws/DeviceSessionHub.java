@@ -10,6 +10,7 @@ import com.ruoyi.studyroom.service.IAccessControlService;
 import com.ruoyi.studyroom.service.IDeviceChannel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
@@ -58,6 +59,13 @@ public class DeviceSessionHub implements IDeviceChannel {
     private final Map<String, Long> lastSeen = new ConcurrentHashMap<>();
     /** 关联键 -> 等待中的回执 */
     private final Map<String, CompletableFuture<Map<String, Object>>> pending = new ConcurrentHashMap<>();
+
+    /**
+     * 与 MQTT 通道共用同一开关(见 {@code studyroom.door.mqtt-open-enabled} 的说明), 默认 false。
+     * 本机设备跑时之盾私有协议(protocolVersion=0), 文档里的远程开门(标准协议)对它不成立。
+     */
+    @Value("${studyroom.door.mqtt-open-enabled:false}")
+    private boolean doorMqttOpenEnabled;
 
     private final ObjectProvider<IAccessControlService> accessServiceProvider;
     private final ObjectProvider<AccessDeviceMapper> deviceMapperProvider;
@@ -277,6 +285,22 @@ public class DeviceSessionHub implements IDeviceChannel {
             log.warn("[门禁WS] 发送失败 sessionId={}: {}", session.getId(), e.getMessage());
             return false;
         }
+    }
+
+    // ================= 能力声明 =================
+
+    /**
+     * 本通道能否用服务器指令开门 —— 与 MQTT 通道共用同一开关, 默认 false。
+     *
+     * <p><b>为什么必须显式重写</b>: {@link IDeviceChannel#supportsRemoteOpen()} 的默认值是 {@code true},
+     * 不重写就等于"默默声明自己会开门"。而本机设备是时之盾私有协议(protocolVersion=0) ——
+     * 厂商文档里的远程开门属于标准协议, 对这台机器不成立(实测任何文档指令都被回 code 7/2/1)。
+     * 万一有 WS 客户端被误登记成设备并抢到通道选择, 上层就会误判成"能开门", 结果用户点了没反应。
+     * 宁可如实声明不支持, 让上层给出"请到门口刷脸/刷卡"的提示。</p>
+     */
+    @Override
+    public boolean supportsRemoteOpen() {
+        return doorMqttOpenEnabled;
     }
 
     // ================= 状态查询 =================

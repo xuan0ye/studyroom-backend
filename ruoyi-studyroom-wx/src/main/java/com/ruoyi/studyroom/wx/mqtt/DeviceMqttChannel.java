@@ -75,20 +75,25 @@ public class DeviceMqttChannel implements IDeviceChannel {
     /**
      * cmd → 厂商 action 名映射(仅收录已在实机/厂商 broker 实测确认的名字)。
      *
-     * <p>{@code open_door} 这个 action 名<b>不再下发</b>。理由(2026-10-08 更正):
-     * 厂商两版协议文档里, "远程开门"都是走 cs 协议的 cmd 报文 ——
-     * v1.11 第(五)节 {@code {"cmd":"openDoor","token","sn"}}, v1.12 第 11 节
-     * {@code {"cmd":"F1openDoor","token","sn"}} → 设备回 {@code {"cmd":"F1openDoor","result":0}}。
-     * 而 {@code action:"open_door"} 在厂商 broker 上只出现在<b>设备→App 方向</b>
-     * (带 {@code "to":"app"}、{@code code:"0"}), 是设备上报的"门已开"回执, 不是开门口令;
-     * 我方设备收它回 {@code code:"1"}。更麻烦的是它会被 {@link #normalizeAck} 翻译成 result,
-     * 抢在真正的 cs 回执之前唤醒等待方 —— 于是"门开了却报失败"或反之。所以直接从白名单移除。</p>
+     * <p>{@code open_door} 这个 action 名<b>不下发</b>。2026-10-09 复核后的完整理由:</p>
+     * <ul>
+     *   <li>它在厂商 broker 上只出现在<b>设备→App 方向</b>(带 {@code "to":"app"}、
+     *       {@code code:"0"}), 是设备"门已开"的<b>上报事件</b>, 不是开门口令;
+     *       全量 {@code iot/cli/#} 抓包里服务器→设备方向出现 <b>0 次</b>;</li>
+     *   <li>我方实机发它, 设备回 {@code code:"1"}(失败);</li>
+     *   <li>它会被 {@link #normalizeAck} 翻译成 result, <b>抢在真正的 cs 回执之前唤醒等待方</b>,
+     *       造成"门开了却报失败"或反之。</li>
+     * </ul>
+     *
+     * <p>{@code F1openDoor} 同样<b>不放进来</b>: 那是 {@code protocolVersion=1} 标准协议的指令,
+     * 本机是 0(时之盾), 实测发过去只回 {@code code:"7"}(不认该动作)。
+     * 结论与开关 {@link #mqttOpenEnabled} 一致: 本机无法用服务器指令开门。</p>
      */
     private static final Map<String, String> CMD_TO_ACTION;
     static {
         Map<String, String> m = new ConcurrentHashMap<>();
         // 键统一大写, 查找时对 cmd 做 toUpperCase。
-        // F1OPENDOOR 刻意不在表里: 开门的正确通道是 cs 协议的 cmd 报文(见类注释), 见上。
+        // F1OPENDOOR 刻意不在表里: 本机协议版本不认(实测 code 7), 见上。
         // 只读探针(用来确认设备在线/建立 lastSeen, 不会产生任何物理动作)
         m.put("F1READPARAM", "read_param");
         CMD_TO_ACTION = Collections.unmodifiableMap(m);
@@ -116,6 +121,66 @@ public class DeviceMqttChannel implements IDeviceChannel {
     /** 是否启用(排查时可临时关掉, 免得与其它通道打架) */
     @Value("${studyroom.access.mqtt.client-enabled:true}")
     private boolean enabled;
+
+    /**
+     * cmd 报文({@code F1*} 标准协议)下发到哪些主题: {@code cs} / {@code eth} / {@code both}, 默认 {@code both}。
+     *
+     * <p>为什么必须可配, 又为什么默认两个都发: 设备订阅哪个主题, 是<b>我们自己在引导应答里告诉它的</b> ——</p>
+     * <ul>
+     *   <li>{@code /access/login} 回 {@code downTopic = cs/<sn>/csmsg};</li>
+     *   <li>{@code /server/access} 回 {@code mqtt_sub = iot/cli/<type>/<sn>/}。</li>
+     * </ul>
+     * <p>本机固件走的是后者(nginx 日志: 它一直在 POST /server/access), 即订阅 {@code iot/cli/.../eth}。
+     * 所以设备把系统参数 {@code protocolVersion} 从 0 改成 1(标准协议)之后, 它到底还在哪个主题上说话,
+     * 事前无法确定 —— <b>默认两个都发就不要这个前提</b>: 谁收到谁执行, 另一条顶多回一个
+     * {@code {"action":"","data":[{"code":"2"}]}}(解析失败)。那种回包没有 token/serialno、也没有 cmd 名,
+     * 匹配不上任何等待方(见 {@link #onMessage}), 所以不会造成"假成功"。</p>
+     *
+     * <p>确认设备实际订阅后, 可以收紧成 {@code cs} 或 {@code eth} 少发一条。</p>
+     */
+    @Value("${studyroom.access.mqtt.cmd-topic:both}")
+    private String cmdTopicMode;
+
+    /** 本次 cmd 报文该发往的主题列表(见 {@link #cmdTopicMode}) */
+    private java.util.List<String> cmdTopics(String sn) {
+        String mode = cmdTopicMode == null ? "both" : cmdTopicMode.trim().toLowerCase();
+        java.util.List<String> topics = new java.util.ArrayList<>(2);
+        if ("cs".equals(mode) || "both".equals(mode)) {
+            topics.add(String.format(PUB_TOPIC_CS_TMPL, sn));
+        }
+        if ("eth".equals(mode) || "both".equals(mode)) {
+            topics.add(String.format(PUB_TOPIC_IOT_TMPL, accessType, sn));
+        }
+        if (topics.isEmpty()) {
+            topics.add(String.format(PUB_TOPIC_CS_TMPL, sn));
+        }
+        return topics;
+    }
+
+    /**
+     * 是否允许"服务器远程开门"。<b>默认 false —— 这台设备当前做不到, 别把它当真打开。</b>
+     *
+     * <p>2026-10-09 实测: 三条独立证据指向同一结论。</p>
+     * <ol>
+     *   <li><b>通道到不了设备</b>: mosquitto 的 SUBSCRIBE 实录显示, 设备(clientId = SN)历史上
+     *       只订阅 {@code iot/cli/0A05/<SN>/eth} 与 {@code iot/cli/FFFF/<SN>/eth},
+     *       <b>从未订阅 {@code cs/}</b>。我们往 {@code cs/<SN>/csmsg} 发过的报文,
+     *       broker 日志里连一次 "Sending PUBLISH to &lt;SN&gt;" 都没有 —— 文档协议的通道是死的。</li>
+     *   <li><b>设备不认这套指令</b>: 把文档里的 action 名(F1openDoor / F1readParam /
+     *       F1setSysCommonParam)发到设备真正订阅的 {@code iot/cli/.../eth}, 一律回
+     *       {@code code:"7"}; 换成 cs 的 cmd 报文则回 {@code code:"2"}(解析失败)。</li>
+     *   <li><b>根因写在厂商文档自己身上</b>: 系统参数 {@code protocolVersion}
+     *       <b>0=时之盾(本机现状) / 1=标准协议</b>, 文档原文"若要使用此文档中的协议该字段需设置为 1"。
+     *       本机是 0, 所以文档里的远程开门对这台机器不成立; 厂商 App 能开门是因为它走
+     *       时之盾协议的加密信封({@code {"code":"<不透明签名串>"}}, 密钥在厂商手里)。</li>
+     * </ol>
+     *
+     * <p>只有这两种情况才该打开本开关: ① 现场把设备 {@code protocolVersion} 改成 1 并重启,
+     * 且确认设备仍连我方 broker、订阅了 {@code cs/} 主题; ② 换成支持标准协议的固件/设备。
+     * 另一条不依赖设备的路是 {@code studyroom.door.open-url} 的继电器执行器。</p>
+     */
+    @Value("${studyroom.door.mqtt-open-enabled:false}")
+    private boolean mqttOpenEnabled;
 
     private final ObjectProvider<IAccessControlService> accessServiceProvider;
     private final ObjectProvider<AccessDeviceMapper> deviceMapperProvider;
@@ -583,10 +648,17 @@ public class DeviceMqttChannel implements IDeviceChannel {
                 // 未实测确认的 action 名一律不猜: 发错命令比不发更危险
                 log.warn("[门禁MQTT] cmd={} 无可下发的 action 名, 未向设备下发该命令", cmd);
             }
-            // 2) 兼容 v1.12 文档协议(login 引导的设备订阅 cs/<sn>/csmsg): 原样 cmd 报文
+            // 2) cmd 报文(F1* 标准协议)原样下发。发到哪个主题由 studyroom.access.mqtt.cmd-topic 决定:
+            //    cs   = cs/<sn>/csmsg        (文档协议; 设备从 /access/login 取 downTopic 时用它)
+            //    eth  = iot/cli/<type>/<sn>/eth (设备从 /server/access 取 mqtt_sub 时用它 —— 本机固件走的正是这条)
+            //    both = 两个都发, 谁收到谁执行。多发一条不会造成假成功: 收错协议时设备回的是
+            //           {"action":"","data":[{"code":"2"}]}, 既没有 token/serialno 也没有 cmd 名,
+            //           匹配不上任何等待方(见 onMessage 的回执分支), 只是白跑一趟。
             if (cmd != null) {
-                String csTopic = String.format(PUB_TOPIC_CS_TMPL, sn);
-                publishBoth(csTopic, MAPPER.writeValueAsString(payload), cmd, sn);
+                String text = MAPPER.writeValueAsString(payload);
+                for (String t : cmdTopics(sn)) {
+                    publishBoth(t, text, cmd, sn);
+                }
             }
             return future.get(wait, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
@@ -618,26 +690,19 @@ public class DeviceMqttChannel implements IDeviceChannel {
     }
 
     /**
-     * 本通道支持服务器远程开门。
+     * 本通道能否用服务器指令直接开门 —— 由 {@code studyroom.door.mqtt-open-enabled} 决定, <b>默认 false</b>。
      *
-     * <p><b>2026-10-08 更正</b>: 这里原先返回 false, 依据是一次"实测"—— 发
-     * {@code {"action":"open_door"}} 设备回 {@code code:"1"}。但那次用的是 <b>action 协议</b>,
-     * 而厂商两版文档里"远程开门"从来不是 action, 而是 <b>cs 协议的 cmd 报文</b>:</p>
-     * <ul>
-     *   <li>v1.11 第(五)节: 下发 {@code {"cmd":"openDoor","token":"xxx","sn":"..."}},
-     *       设备回 {@code {"cmd":"openDoor","result":0}};</li>
-     *   <li>v1.12 第 11 节: 下发 {@code {"cmd":"F1openDoor",...}}(其余同上);
-     *       并注明"设备开门成功后会再通过'开门记录上传'接口上传一条开门记录";</li>
-     *   <li>v1.11「开门记录上传」里 <b>开门类型 5 = 远程开门</b> —— 设备自己承认远程开门这一路径。</li>
-     * </ul>
-     * <p>我们这台设备本来就在用这条通道: 探针 {@code F1readParam} 走 {@code cs/<sn>/csmsg}
-     * 下发、设备有回包。{@link #sendAndAwait} 会把 {@code {cmd,sn,token}} 原样发到该主题,
-     * 回执带 {@code result} 时按 token/命令名唤醒等待方, 上层 {@code publish()} 判 {@code result==0}
-     * —— 所以"门真开了"才有成功, 超时/被拒一律如实报失败, 不会出现"提示成功但门没动"。
+     * <p>2026-10-08 这里曾被改成 {@code true}, 依据是"厂商文档里远程开门走 cs 协议的 cmd 报文"。
+     * 那个推理<b>错在前提</b>: 文档描述的是 {@code protocolVersion=1}(标准协议), 而这台设备跑的是
+     * {@code protocolVersion=0}(时之盾) —— 设备从未订阅 {@code cs/} 主题, 对我们的指令一律回
+     * {@code code:"7"}。完整实测依据见 {@link #mqttOpenEnabled} 字段注释。</p>
+     *
+     * <p>打开本开关后, 成功判据仍是设备回执 {@code result==0}(见 {@code publish}),
+     * 超时/被拒一律如实报失败, 不会出现"提示成功但门没动"。</p>
      */
     @Override
     public boolean supportsRemoteOpen() {
-        return true;
+        return mqttOpenEnabled;
     }
 
     @Override

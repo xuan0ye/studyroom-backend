@@ -37,4 +37,10 @@ public class AccessController {
     public R<Boolean> openDoor(@RequestParam(required = false) Long roomId) {
         return R.ok(accessControlService.remoteOpenDoor(LoginHelper.getUserId(), roomId));
     }
+
+    @ApiOperation("一键开门是否可用(前端据此决定是否显示按钮)")
+    @GetMapping("/door/available")
+    public R<Boolean> doorAvailable() {
+        return R.ok(accessControlService.doorOpenAvailable());
+    }
 }

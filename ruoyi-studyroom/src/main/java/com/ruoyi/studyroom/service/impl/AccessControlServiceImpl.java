@@ -95,6 +95,77 @@ public class AccessControlServiceImpl implements IAccessControlService {
     @Value("${studyroom.access.revoke.backoff-minutes:1,3,10}")
     private String revokeBackoffMinutes;
 
+    /**
+     * 开门执行器地址(继电器 / 店内本地桥)。<b>配了就用它开门, 优先于设备通道。</b>
+     *
+     * <p>为什么需要它: 这台门禁机固件只订 {@code iot/cli/<type>/<sn>/eth} 与
+     * {@code iot/cli/FFFF/<sn>/eth}, <b>不订 cs 主题</b>; 而厂商两版协议文档里的远程开门
+     * ({@code cmd=F1openDoor}) 属于 cs/cmd 协议 —— 发过去设备收不到。action 协议的
+     * {@code open_door} 又只是"门已开"的上报格式(当命令发回 {@code code:"1"})。
+     * 所以唯一稳妥的办法是在门锁的"开门按钮"两端<b>并联一个干接点继电器</b>,
+     * 由这个 URL 去"替你按一下按钮" —— 与人脸/刷卡/密码互不影响。</p>
+     *
+     * <p>支持任意实现: ESP32/ESP8266 自建 HTTP、米家/涂鸦干接点、店内小主机上的本地桥。
+     * URL 里可用 {@code {userId}} / {@code {roomId}} 占位。留空 = 不走这条通道。</p>
+     *
+     * <p>例: {@code studyroom.door.open-url: http://192.168.1.50/door/open}</p>
+     */
+    @Value("${studyroom.door.open-url:}")
+    private String doorOpenUrl;
+
+    /** 开门执行器 HTTP 方法(GET/POST), 默认 GET */
+    @Value("${studyroom.door.open-method:GET}")
+    private String doorOpenMethod;
+
+    /** 开门执行器请求体(POST 用), 支持 {userId} / {roomId} 占位 */
+    @Value("${studyroom.door.open-body:}")
+    private String doorOpenBody;
+
+    /**
+     * 设备当前用哪套协议下发指令: {@code action}(老: add_user/add_face 走 iot/cli/&lt;type&gt;/&lt;sn&gt;/eth)
+     * 或 {@code standard}(新: F1redactUser/F1deleteUser 走 cs/&lt;sn&gt;/csmsg)。
+     *
+     * <p>为什么需要它: 设备系统参数 {@code protocolVersion} 由 0(时之盾) 改成 1(标准协议) 之后,
+     * 老的 action 指令设备不再响应 —— 若仍"先试老协议再回退", 每次下发都要先白等一个超时(最长 15 秒),
+     * 用户录脸要干等半分钟。置为 {@code standard} 即直接走新协议, 不再空等。</p>
+     *
+     * <p>默认 {@code action} = 现状不变。<b>设备协议切换后改这里即可, 不需要改代码</b>。</p>
+     */
+    @Value("${studyroom.access.device-protocol:action}")
+    private String deviceProtocol;
+
+    /** 当前是否走标准协议(F1* 指令, cs 主题) */
+    private boolean useStandardProtocol() {
+        return "standard".equalsIgnoreCase(StringUtils.trim(deviceProtocol));
+    }
+
+    /**
+     * 「设备指令开门」总开关 —— 与各设备通道读的是同一个配置项
+     * {@code studyroom.door.mqtt-open-enabled}, 默认 false。
+     *
+     * <p>默认关闭的实测依据: 本机设备跑 {@code protocolVersion=0}(时之盾私有协议),
+     * 只订阅 {@code iot/cli/<type>/<sn>/eth}, 从未订阅文档协议的 {@code cs/};
+     * 实测文档里的 action 回 {@code code:"7"}、cs 的 cmd 报文回 {@code code:"2"}、
+     * {@code open_door}/{@code read_param} 回 {@code code:"1"} —— 服务器指令开不了这扇门。
+     * 厂商文档里的远程开门属于 {@code protocolVersion=1} 标准协议, 且现场菜单里没有该选项。</p>
+     */
+    @Value("${studyroom.door.mqtt-open-enabled:false}")
+    private boolean doorMqttOpenEnabled;
+
+    /**
+     * 开门专用 RestTemplate(带超时)。
+     * 继电器不在线时不能把用户的开门请求拖死 —— 所以单独一个, 不动共用的那个。
+     */
+    private final RestTemplate doorRestTemplate = buildDoorRestTemplate();
+
+    private static RestTemplate buildDoorRestTemplate() {
+        org.springframework.http.client.SimpleClientHttpRequestFactory f =
+            new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        f.setConnectTimeout(2000);
+        f.setReadTimeout(4000);
+        return new RestTemplate(f);
+    }
+
     @Override
     public AccessProfileVo uploadFaceAndSync(Long userId, String userName, AccessFaceUploadBo bo) {
         if (bo == null) {
@@ -221,9 +292,10 @@ public class AccessControlServiceImpl implements IAccessControlService {
             .orderByDesc(AccessProfile::getUpdateTime)
             .last("limit 1");
         AccessProfile profile = accessProfileMapper.selectOne(lqw);
-        // 能否远程开门只取决于"当天是否有有效预约", 与人脸同步状态无关
+        // 能否远程开门 = "当天有有效预约" 且 "本机确实开得了门"(见 doorOpenAvailable)。
+        // 只判预约会给出一个点了却开不了的按钮 —— 本机设备当前协议就不支持服务器开门口令。
         OrderVo activeOrder = queryCurrentActiveOrder(userId, null);
-        boolean canOpen = activeOrder != null;
+        boolean canOpen = activeOrder != null && doorOpenAvailable();
         // 既没上传过人脸、当天也没预约: 维持原有 null 语义(老版本小程序行为不变)
         if (profile == null && !canOpen) {
             return null;
@@ -408,6 +480,25 @@ public class AccessControlServiceImpl implements IAccessControlService {
         return null;
     }
 
+    /**
+     * 「一键开门」当前是否真的可用(判定依据见 {@link IAccessControlService#doorOpenAvailable()})。
+     *
+     * <p>这个方法是"按钮显不显示"的唯一依据, 与"用户有没有资格"无关 ——
+     * 后者仍由各调用点的"当天有有效预约"校验负责。两者都成立才该给用户按钮。</p>
+     */
+    @Override
+    public boolean doorOpenAvailable() {
+        // ① 已配置开门执行器(继电器/店内本地桥): 与设备协议无关, 最稳妥
+        if (StringUtils.isNotBlank(doorOpenUrl)) {
+            return true;
+        }
+        // ② 设备指令开门: 只看配置开关, **不去遍历通道的 supportsRemoteOpen()** ——
+        //    那个接口方法的默认值是 true, 某个实现(如 WebSocket 通道)只要不重写就会
+        //    "默默声称自己能开门", 于是按钮显示出来、点下去却开不了。
+        //    这里与各通道读的是同一个配置项(studyroom.door.mqtt-open-enabled), 不会不一致。
+        return doorMqttOpenEnabled;
+    }
+
     @Override
     public boolean remoteOpenDoor(Long userId, Long roomId) {
         OrderVo activeOrder = queryCurrentActiveOrder(userId, null);
@@ -417,18 +508,31 @@ public class AccessControlServiceImpl implements IAccessControlService {
         if (roomId != null && activeOrder.getRoomId() != null && !roomId.equals(activeOrder.getRoomId())) {
             throw new ServiceException("仅允许开启当前预约自习室门禁");
         }
+        // 优先走"开门执行器"(继电器/本地桥): 设备固件没有服务器开门口令, 这是唯一稳妥路径。
+        // 配了它就用它; 失败后仍回退到设备通道(万一以后设备换了协议/固件)。
+        if (StringUtils.isNotBlank(doorOpenUrl)) {
+            if (callDoorExecutor(userId, activeOrder.getRoomId())) {
+                log.info("[门禁] 开门执行器已执行: userId={} roomId={}", userId, activeOrder.getRoomId());
+                return true;
+            }
+            log.warn("[门禁] 开门执行器失败, 回退设备通道: userId={} url={}", userId, doorOpenUrl);
+        }
         AccessDevice device = getRoomDevice(activeOrder.getRoomId());
         if (device == null) {
             throw new ServiceException("当前自习室未配置门禁设备");
         }
         IDeviceChannel capCh = pickDeviceChannel(device.getSn());
         if (capCh != null && !capCh.supportsRemoteOpen()) {
-            // 该型号走厂商 action 协议, 明文通道里没有"远程开门"指令:
-            // open_door 只是设备"门已开"的上报事件(且只发给厂商 App), 服务器发同名指令会被拒(实测 code:"1");
-            // 真正的远程开门必须由厂商云端签发 {"code":"<不透明串>"} 授权, 密钥在厂商手里。
-            // 这里如实拒绝 —— 绝不给用户一个"提示开门成功但门没动"的按钮。
-            throw new ServiceException("这台门禁机不支持远程开门（开门授权由厂商云端签发，我们发不出）。"
-                + "请到门口刷脸或刷卡开门，或联系工作人员。");
+            // 2026-10-09 定论(三条实测证据, 详见 DeviceMqttChannel#mqttOpenEnabled):
+            // 本机跑的是 protocolVersion=0(时之盾)私有协议, 只订阅 iot/cli/<type>/<sn>/eth、从未订阅 cs/;
+            // 厂商文档里的远程开门(F1openDoor, 属 protocolVersion=1 标准协议)对它不生效 ——
+            // 实测任何文档 action 回 code:"7", cs 的 cmd 报文回 code:"2", open_door/read_param 回 code:"1"。
+            // 真正的远程开门由厂商云端签发 {"code":"<不透明签名串>"}, 密钥在厂商手里, 第三方发不出。
+            // 因此这里如实拒绝(并把技术原因写日志), 只给用户可执行的替代方案 ——
+            // 绝不给一个"提示开门成功但其实门没动"的按钮。
+            log.warn("[门禁] 拒绝远程开门: 设备当前协议不支持服务器开门口令(protocolVersion=0, 需现场改为 1 或走继电器) "
+                + "userId={} roomId={} sn={}", userId, activeOrder.getRoomId(), device.getSn());
+            throw new ServiceException("本门禁机暂不支持远程开门，请到门口刷脸或刷卡进入，或联系工作人员。");
         }
         Map<String, Object> cmd = new HashMap<>();
         cmd.put("cmd", "F1openDoor");
@@ -443,6 +547,43 @@ public class AccessControlServiceImpl implements IAccessControlService {
             throw new ServiceException(buildPublishFailReason(device.getSn()));
         }
         return true;
+    }
+
+    /**
+     * 调用"开门执行器"(继电器 / 店内本地桥)。
+     *
+     * <p>安全前提: 上层 {@code remoteOpenDoor} 已校验"当天有有效预约"才调到这里,
+     * 所以继电器不会变成谁都能按的开门按钮。</p>
+     *
+     * <p>判据如实: HTTP 2xx 才算执行成功; 连不上/超时/非 2xx 一律 false,
+     * 由上层抛错告诉用户"开门失败", 不会出现"提示成功但门没动"。</p>
+     */
+    private boolean callDoorExecutor(Long userId, Long roomId) {
+        String url = doorOpenUrl;
+        String uid = userId == null ? "" : String.valueOf(userId);
+        String rid = roomId == null ? "" : String.valueOf(roomId);
+        url = url.replace("{userId}", uid).replace("{roomId}", rid);
+        try {
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            org.springframework.http.ResponseEntity<String> resp;
+            if ("POST".equalsIgnoreCase(doorOpenMethod)) {
+                headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+                String body = StringUtils.isBlank(doorOpenBody) ? "{}"
+                    : doorOpenBody.replace("{userId}", uid).replace("{roomId}", rid);
+                resp = doorRestTemplate.postForEntity(url,
+                    new org.springframework.http.HttpEntity<>(body, headers), String.class);
+            } else {
+                resp = doorRestTemplate.exchange(url, org.springframework.http.HttpMethod.GET,
+                    new org.springframework.http.HttpEntity<>(headers), String.class);
+            }
+            boolean ok = resp.getStatusCode().is2xxSuccessful();
+            log.info("[门禁] 开门执行器 {} -> HTTP {} {}", url, resp.getStatusCodeValue(),
+                ok ? "成功" : "失败");
+            return ok;
+        } catch (Exception e) {
+            log.warn("[门禁] 开门执行器调用异常 url={}: {}", url, e.getMessage());
+            return false;
+        }
     }
 
     @Override
@@ -600,12 +741,12 @@ public class AccessControlServiceImpl implements IAccessControlService {
     }
 
     private boolean publishRedactUser(AccessProfile profile, AccessDevice device, String faceBase64) {
-        // ── 优先走设备原生 action 协议 ──────────────────────────────────────────
-        // 厂商《云端MQTT协议精简版 v1.12》那套 cmd/F1redactUser 这台固件根本不认
-        // (实测下发 F1getUserList 回 {"action":"","data":[{"code":"2"}]} = 未知动作)。
-        // 它认的是 add_user(建人员) + add_face(下发人脸), 字段格式已从厂商 broker 真实流量还原,
-        // 并在本设备上实测成功(add_user 回 code:"0" 并给出分配的 user_id)。
-        IDeviceChannel nativeCh = pickNativeChannel();
+        // ── 路线选择: 老的 action 协议 还是 新的标准协议(F1redactUser) ──────────────
+        // 两套指令**不是**同一台设备都认: 设备系统参数 protocolVersion=0(时之盾) 只认
+        // action(add_user/add_face, 走 iot/cli/<type>/<sn>/eth), =1(标准协议) 只认
+        // F1*(F1redactUser 等, 走 cs/<sn>/csmsg)。由 studyroom.access.device-protocol 决定先走哪套,
+        // 另一套作为回退 —— 这样切换协议前后都不会漏发, 也不会白等一个超时。
+        IDeviceChannel nativeCh = useStandardProtocol() ? null : pickNativeChannel();
         if (nativeCh != null) {
             Map<String, Object> r = nativeCh.enrollUser(device.getSn(), buildUserAcct(profile),
                 profile.getUserName(), faceBase64, validityOf(profile));
@@ -639,7 +780,9 @@ public class AccessControlServiceImpl implements IAccessControlService {
         body.put("sTime", System.currentTimeMillis() / 1000);
         body.put("eTime", System.currentTimeMillis() / 1000);
         body.put("userName", profile.getUserName());
-        body.put("userType", 2);
+        // userType: 文档「1.服务器下发注册或修改人员信息」明确 0=普通用户, 1=管理员。
+        // 原值 2 是照抄老 action 协议的 user_type=32 那套取值, 标准协议下不合法, 会被人脸指令拒掉。
+        body.put("userType", 0);
         body.put("recordPic", profile.getRecordPic() == null ? 1 : profile.getRecordPic());
         // 人脸照片仅作为下发参数(内存), 不经过 profile 字段落库
         body.put("pic", faceBase64 == null ? "" : faceBase64);
@@ -662,7 +805,9 @@ public class AccessControlServiceImpl implements IAccessControlService {
      * 只删一个的话剩下的仍能刷开门。按账号找不到任何人时视为<b>已不存在</b>并返回成功(删除幂等)。</p>
      */
     private boolean deleteUserOnDevice(AccessProfile profile, AccessDevice device, String orderId) {
-        IDeviceChannel nativeCh = pickNativeChannel();
+        // 协议切换适配同 publishRedactUser: 标准协议下设备不再认 action 的 read_user/del_user,
+        // 直接走 F1deleteUser(按工号删, 反而比"先查列表再按 user_id 删"更省一步)。
+        IDeviceChannel nativeCh = useStandardProtocol() ? null : pickNativeChannel();
         if (nativeCh != null) {
             String acct = buildUserAcct(profile);
             int deleted = 0;
@@ -685,7 +830,10 @@ public class AccessControlServiceImpl implements IAccessControlService {
             log.info("[门禁] 设备上未找到账号 {}, 视为已撤销: sn={}", acct, device.getSn());
             return true;
         }
-        return publishDeleteUser(profile.getJobnumber(), device, orderId);
+        // jobnumber 兜底: 老库里理论上有 jobnumber 为空的档案(设备协议要求必填),
+        // 退化成 userId 也远好过下发一个 null 让设备直接拒掉。
+        Long job = profile.getJobnumber() == null ? profile.getId() : profile.getJobnumber();
+        return publishDeleteUser(job, device, orderId);
     }
 
     /** 找出支持"设备原生人员管理"的通道(不要求当前在线: 离线时由 sendAndAwait 如实返回失败) */    private IDeviceChannel pickNativeChannel() {

@@ -376,6 +376,21 @@ studyroom:
       backoff-minutes: 1,3,10
     alert:
       webhook-url:
+  # 一键开门(远程开门)。两条路各自独立, 默认都关着 —— 因为本机设备当前两条都不满足,
+  # 关着时小程序按钮不显示(前端问 /api/wx/access/door/available), 不会出现"点了却开不了门"。
+  door:
+    # 【路① 设备指令开门】需要设备跑标准协议: protocolVersion=1。
+    # 现状: 本机是 0(时之盾私有协议) —— 设备只订阅 iot/cli/<type>/<sn>/eth, 从未订阅文档协议的
+    # cs/ 主题; 实测文档里的 action 回 code 7、cs 的 cmd 报文回 code 2、open_door/read_param 回 code 1,
+    # 即服务器指令开不了门。现场把设备协议版本改成 1 并重启、确认设备订阅了 cs 主题后, 再把这里改成 true。
+    mqtt-open-enabled: ${STUDYROOM_DOOR_MQTT_OPEN:false}
+    # 【路② 开门执行器(推荐/最稳妥)】继电器并联到门禁机"出门按钮"的干接点, 由它替你按一下。
+    # 与设备协议无关, 门禁机照常记一条开门记录; 留空 = 未配置。配了就优先走它。
+    # URL 与 body 支持 {userId} / {roomId} 占位符。
+    # 例: http://192.168.1.50/door/open
+    open-url: ${STUDYROOM_DOOR_OPEN_URL:}
+    open-method: ${STUDYROOM_DOOR_OPEN_METHOD:GET}
+    open-body: ${STUDYROOM_DOOR_OPEN_BODY:}
   access:
     mqtt:
       # broker 内部地址(本机 mosquitto)
@@ -387,6 +402,10 @@ studyroom:
       password: ${STUDYROOM_MQTT_PASSWORD:4McFjMfBMCtUoPNzgPpILfcA}
       pub-topic: face-device/sub
       sub-topic: face-device/pub
+      # F1* 标准协议指令下发到哪个主题: cs(cs/<sn>/csmsg, 文档协议) / eth(iot/cli/<type>/<sn>/eth, 本机固件订阅的)
+      # 默认 both = 两个都发。谁收到谁执行, 另一条只回一个 code 2(解析失败), 不会误判成功。
+      # 确定设备实际订阅后可收紧。设备协议版本切换(protocolVersion 0→1)时无需改动这里。
+      cmd-topic: ${STUDYROOM_MQTT_CMD_TOPIC:both}
     # 设备引导(GET/POST /server/access/): 厂商协议里设备靠它拿 MQTT 配置
     bootstrap:
       enabled: true
@@ -402,6 +421,10 @@ studyroom:
       keepalive: 90
     redis:
       command-channel: studyroom:access:command
+    # 设备当前用哪套指令协议: action(老: add_user/add_face 走 iot/cli/.../eth) / standard(新: F1* 走 cs/<sn>/csmsg)
+    # 设备系统参数 protocolVersion: 0=时之盾(=action), 1=标准协议(=standard)。
+    # 切换设备协议后改这里即可, 不用改代码 —— 见 AccessControlServiceImpl#useStandardProtocol。
+    device-protocol: ${STUDYROOM_DEVICE_PROTOCOL:action}
     bridge:
       enabled: false
       client-id-prefix: studyroom-access-bridge-

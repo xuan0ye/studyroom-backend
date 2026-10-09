@@ -60,8 +60,13 @@ public class AccessLoginController {
      * 注意: <b>不能</b>用文档里的裸 {@code /login} —— 那个已被 RuoYi 后台的 SysLoginController 占用,
      * 再加一个会 Ambiguous mapping 直接导致启动失败。文档明确「路径写在设备服务器地址后面」,
      * 故改用 {@code /access/login}: nginx 已转发该前缀, 且已在 security.excludes 放行名单内。
+     *
+     * <p>另外两个别名 {@code /server/login}、{@code /serve/login} 是为设备协议切换准备的:
+     * 设备把域名换成我们的之后, 实际请求路径由它自己拼(现状拼的是 {@code /server/access}),
+     * 三个都收着, 无论固件拼出哪一种都能拿到配置, 不必依赖现场改设备里的路径。</p>
      */
-    @PostMapping(value = "/access/login", produces = "application/json;charset=UTF-8")
+    @PostMapping(value = {"/access/login", "/server/login", "/serve/login"},
+        produces = "application/json;charset=UTF-8")
     public Map<String, Object> login(@RequestBody(required = false) String raw, HttpServletRequest request) {
         String sn = null;
         String cmd = null;
