@@ -68,9 +68,16 @@ public class PromoBo extends BaseEntity {
     private String tag;
 
     /**
-     * 配图地址
+     * 配图地址。
+     *
+     * <p><b>为什么带自定义反序列化</b>: 后台「热门活动」表单用的是图片上传组件
+     * {@code components/ImageUpload}, 它的 v-model <b>永远 emit 数组</b> ——
+     * 于是有没有选图, 保存时 imageUrl 都是 {@code ["url"]} 或 {@code []},
+     * 默认反序列化会报 {@code Cannot deserialize value of type java.lang.String from Array value}。
+     * 交给 {@link FirstStringDeserializer} 归一成单个 URL(空数组 → null)。</p>
      */
     @ApiModelProperty(value = "配图地址")
+    @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using = FirstStringDeserializer.class)
     private String imageUrl;
 
     /**

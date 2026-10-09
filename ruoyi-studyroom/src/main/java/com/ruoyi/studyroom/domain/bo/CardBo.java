@@ -39,6 +39,16 @@ public class CardBo extends BaseEntity {
     private String cardTitle;
 
     /**
+     * 卡券详细说明(小程序卡券页展示)。
+     *
+     * <p>后台「卡券管理」表单里维护, 支持换行; 长度上限 1000 字符。
+     * 用来讲清相近卡券的区别(如是否沉浸区/带帘、可请假几次、是否锁座)。</p>
+     */
+    @ApiModelProperty(value = "卡券详细说明")
+    @javax.validation.constraints.Size(max = 1000, message = "卡券说明最多 1000 字")
+    private String cardDesc;
+
+    /**
      * 价格
      */
     @ApiModelProperty(value = "价格", required = true)

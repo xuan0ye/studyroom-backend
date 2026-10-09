@@ -40,6 +40,13 @@ public class CardVo {
     private String cardTitle;
 
     /**
+     * 卡券详细说明(小程序卡券页展示, 支持换行)
+     */
+    @ExcelProperty(value = "卡券说明")
+    @ApiModelProperty("卡券详细说明")
+    private String cardDesc;
+
+    /**
      * 价格
      */
     @ExcelProperty(value = "价格")
