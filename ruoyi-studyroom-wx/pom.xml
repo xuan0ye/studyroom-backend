@@ -31,5 +31,12 @@
             <groupId>com.ruoyi</groupId>
             <artifactId>ruoyi-framework</artifactId>
         </dependency>
+
+        <!-- 系统模块: 小程序首页要读后台「通知公告」(sys_notice)。
+             framework 不依赖 system, 所以这里显式声明; 运行时 ruoyi-system 本来就在 fat jar 里, 不新增依赖包。 -->
+        <dependency>
+            <groupId>com.ruoyi</groupId>
+            <artifactId>ruoyi-system</artifactId>
+        </dependency>
     </dependencies>
 </project>

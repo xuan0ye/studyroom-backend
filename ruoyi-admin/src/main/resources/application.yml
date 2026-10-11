@@ -159,6 +159,8 @@ security:
     - /api/wx/common/promo
     - /api/wx/common/card
     - /api/wx/common/seatPositions
+    # 首页公告(后台通知公告): 首页未登录也要能看, 故放行; 只返回已发布公告的标题/内容, 无敏感信息
+    - /api/wx/common/notice
     - /api/wx/pay/notify/order
     # 抖音生活服务 SPI 回调(抖音服务器直接调用, 无登录态; 由 SPI 验签保证来源)
     - /goodlife/**

@@ -9,6 +9,8 @@ import com.ruoyi.studyroom.domain.Reserved;
 import com.ruoyi.studyroom.domain.bo.*;
 import com.ruoyi.studyroom.domain.vo.*;
 import com.ruoyi.studyroom.service.*;
+import com.ruoyi.system.domain.SysNotice;
+import com.ruoyi.system.service.ISysNoticeService;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +43,8 @@ public class CommonController {
     private final ISeatDeviceService seatDeviceService;
     private final IUserService userService;
     private final IRoomConfigService roomConfigService;
+    /** 后台「系统管理-通知公告」的数据源(小程序首页公告条用) */
+    private final ISysNoticeService noticeService;
     @ApiOperation("门店信息")
     @GetMapping("/store")
     public R<TableDataInfo<RoomVo>> roomList(RoomBo bo, PageQuery pageQuery){
@@ -64,6 +68,68 @@ public class CommonController {
         PromoBo promoBo = new PromoBo();
         promoBo.setStatus(1);
         return R.ok(promoService.queryList(promoBo));
+    }
+
+
+    /**
+     * 首页通知公告(后台「系统管理-通知公告」里维护的, 小程序首页公告条用)。
+     *
+     * <p><b>状态语义注意</b>: {@code sys_notice.status} 是 {@code 0=正常 / 1=关闭}(与直觉相反),
+     * 这里只取 {@code "0"}; 否则 RuoYi 自带的演示公告会被推到顾客首页。
+     * (部署时已把两条 2018 年的演示公告置为关闭。)</p>
+     *
+     * <p>返回里同时给富文本 {@code content} 和压成一行的纯文本 {@code contentText}:
+     * 首页公告条只显示一行, 点开才用富文本渲染全文。</p>
+     *
+     * @param limit 最多返回几条, 默认 5
+     */
+    @ApiOperation("首页通知公告(已发布, 最新的在前)")
+    @GetMapping("/notice")
+    public R<List<Map<String, Object>>> notice(@RequestParam(required = false) Integer limit) {
+        int n = (limit == null || limit <= 0 || limit > 20) ? 5 : limit;
+        List<SysNotice> all = noticeService.selectNoticeList(new SysNotice());
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (all != null) {
+            all.stream()
+                .filter(x -> x != null && "0".equals(String.valueOf(x.getStatus())))
+                .sorted(Comparator.comparing(SysNotice::getCreateTime,
+                    Comparator.nullsLast(Comparator.<java.util.Date>reverseOrder())))
+                .limit(n)
+                .forEach(x -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("noticeId", x.getNoticeId());
+                    m.put("title", x.getNoticeTitle());
+                    m.put("type", x.getNoticeType());
+                    m.put("content", x.getNoticeContent());
+                    m.put("contentText", htmlToPlainText(x.getNoticeContent()));
+                    m.put("createTime", x.getCreateTime());
+                    out.add(m);
+                });
+        }
+        return R.ok(out);
+    }
+
+    /**
+     * 把公告富文本压成一行纯文本(首页公告条只显示一行; 详情仍用富文本渲染)。
+     * 只做最朴素的去标签与实体还原 —— 这里不引入 jsoup, 公告内容是门店后台自己写的。
+     */
+    private static String htmlToPlainText(String html) {
+        if (StringUtils.isBlank(html)) {
+            return "";
+        }
+        String t = html
+            .replaceAll("(?is)<(script|style)[^>]*>.*?</\\1>", " ")
+            .replaceAll("(?is)<br\\s*/?>", " ")
+            .replaceAll("(?is)</(p|div|li|tr|h[1-6])>", " ")
+            .replaceAll("(?is)<[^>]+>", "")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replaceAll("\\s+", " ")
+            .trim();
+        return t.length() > 80 ? t.substring(0, 80) + "…" : t;
     }
 
 
