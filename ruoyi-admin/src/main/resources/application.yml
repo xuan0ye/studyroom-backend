@@ -109,7 +109,13 @@ sa-token:
   # token临时有效期 (指定时间无操作就过期) 单位: 秒
   activity-timeout: 2592000
   # 是否允许同一账号并发登录 (为true时允许一起登录, 为false时新登录挤掉旧登录)
-  is-concurrent: false
+  # ⚠ 必须为 true(2026-10-11 改, 原为 false):
+  #   小程序有"静默重登"(请求 401 时自动 wx.login 换新 token, 见 config/request.js),
+  #   若为 false, 每次静默重登都会把上一个 token 顶下线 → 正在飞行中的请求带着旧 token → 401 →
+  #   再重登 → 两边互相顶。线上日志累计出现 500 次 "Token已被顶下线",
+  #   用户看到的就是"明明登录着, 进预约页却提示请先登录, 回我的页退出重登一次才好"。
+  #   并发登录对自习室业务没有安全意义(同一微信号多设备登录是正常需求)。
+  is-concurrent: true
   # 在多人登录同一账号时，是否共用一个token (为true时所有登录共用一个token, 为false时每次登录新建一个token)
   is-share: false
   # 是否尝试从header里读取token
