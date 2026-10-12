@@ -71,12 +71,18 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
     private int earlyStartHour;
 
     /**
-     * 开灯签到开关(默认关)。
+     * 开灯签到开关(<b>2026-10-12 起默认开</b>, yml: {@code studyroom.checkin.light-on-enabled})。
      *
-     * <p>签到口径已改为门禁刷脸到店。保留这个开关是为了"万一门禁推送不通能临时退回旧口径",
-     * 而<b>不是</b>让两种口径同时生效 —— 同时生效就会出现"开灯即签到", 等于没改。</p>
+     * <p><b>为什么默认开</b>: "门禁刷脸到店签到"({@link #checkInByDoor}) 在本机硬件上不可能实现 ——
+     * 设备不支持服务器主动读通行记录({@code read_record} 回 code 1/2), 刷卡开门也不向我们推送任何报文,
+     * 标准协议的 HTTP {@code upRecord} 同样没有。实测 10-05~10-12 签到彻底断流:
+     * 排行榜三个榜全空、签到积分不发、"已签到不允许取消"的保护失效。</p>
+     *
+     * <p>故退回开灯口径(与早到榜文案"今日 6 点后谁先到谁先开灯"一致)。
+     * 将来换成会推送通行记录的门禁机, 把环境变量 {@code STUDYROOM_CHECKIN_LIGHT_ON_ENABLED=false}
+     * 设上即可切回刷脸口径, 不需要改代码。</p>
      */
-    @org.springframework.beans.factory.annotation.Value("${studyroom.checkin.light-on-enabled:false}")
+    @org.springframework.beans.factory.annotation.Value("${studyroom.checkin.light-on-enabled:true}")
     private boolean lightOnCheckInEnabled;    /**
      * 查询日卡消费记录
      *
@@ -770,9 +776,9 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
      */
     @Override
     public boolean checkInByLightOn(Long seatId, Long userId) {
-        // 签到口径已改为"门禁刷脸到店"(见 checkInByDoor), 开灯不再作为签到依据 ——
-        // 开灯依赖灯控链路, 而且"到座位开个灯就走"也能糊弄过去; 门口刷脸则是人必须真的到场。
-        // 这里保留开关: 万一门禁推送不通, 把它打开即可临时退回旧口径。
+        // 当前口径 = 开灯签到(2026-10-12 起默认开), 详见 lightOnCheckInEnabled 的说明。
+        // 门禁刷脸口径(checkInByDoor)在本机硬件上收不到任何事件, 已不可用;
+        // 将来换了会推送通行记录的门禁机, 把开关关掉即可切回。
         if (!lightOnCheckInEnabled) {
             return false;
         }
@@ -795,17 +801,88 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
                 update.setCheckInTime(new Date());
                 update.setStatus(1); // 1-已使用: 开灯即签到=已到店使用, 当天预约不可再取消
                 updateByBo(update);
-                // 签到成功奖励积分(每天首次签到加分, 按连续天数递增, 已由积分服务去重)
-                try {
-                    int earned = pointsService.addByCheckIn(userId);
-                    if (earned > 0) {
-                        log.info("签到奖励积分 userId={} earned={}", userId, earned);
-                    }
-                } catch (Exception e) {
-                    log.warn("签到积分发放失败 userId={}", userId, e);
-                }
+                awardCheckInPoints(userId);
                 return true;
             }
+        }
+        // 锁座卡(月卡/季卡/锁座中的周卡)在锁座期内不会每天生成消费记录 —— 补一条今天的记录
+        if (ensureTodayRecordForLockedSeat(seatId, userId)) {
+            awardCheckInPoints(userId);
+            return true;
+        }
+        return false;
+    }
+
+    /** 签到成功奖励积分(每天首次加分, 按连续天数递增, 已由积分服务去重) */
+    private void awardCheckInPoints(Long userId) {
+        try {
+            int earned = pointsService.addByCheckIn(userId);
+            if (earned > 0) {
+                log.info("签到奖励积分 userId={} earned={}", userId, earned);
+            }
+        } catch (Exception e) {
+            log.warn("签到积分发放失败 userId={}", userId, e);
+        }
+    }
+
+    /**
+     * 锁座卡「当天没有消费记录」时, 补一条今天的记录并视为已签到。
+     *
+     * <p><b>为什么必须补</b>: 锁座期内 {@link #book} 会直接拒绝再次预约
+     * ("该卡已锁定座位，无需重复预约"), 所以月卡/季卡/锁座中的周卡同学在锁座期内
+     * <b>不会</b>每天生成 {@code sr_day_card_consumption} 记录; 而签到原先要求"当天有记录",
+     * 于是这批人到店开灯也签不上 —— 排行榜上永远没有他们
+     * (2026-10-12 实测两位季卡/月卡同学, 15:08 与 19:11 点了开灯却无签到)。</p>
+     *
+     * <p>判定条件与 {@code DeviceController} 放行"开灯"的第 3 条<b>完全一致</b>
+     * (本人会员卡 {@code lock_seat_id} = 该座位, 且锁座窗口覆盖今天), 避免"能开灯却签不上"的口径分裂。</p>
+     *
+     * <p>安全性: 锁座卡的使用天数由<b>锁座窗口</b>决定(见 {@link #freezeRemaining}, 以及预约时
+     * "把卡有效期同步为锁座窗口结束日"), 补一条当天记录不会重复扣次, 也不影响请假/停卡逻辑。</p>
+     *
+     * @return true 表示已补记录并写入签到时间
+     */
+    private boolean ensureTodayRecordForLockedSeat(Long seatId, Long userId) {
+        if (seatId == null || userId == null) {
+            return false;
+        }
+        try {
+            CardUserBo cuQuery = new CardUserBo();
+            cuQuery.setUserId(userId);
+            cuQuery.setLockSeatId(seatId);
+            List<CardUserVo> cards = cardUserService.queryList(cuQuery);
+            if (cards == null || cards.isEmpty()) {
+                return false;
+            }
+            Date dayStart = DateUtil.beginOfDay(new Date());
+            Date dayEnd = DateUtil.offsetDay(dayStart, 1);
+            for (CardUserVo cu : cards) {
+                if (cu.getLockSeatId() == null || !cu.getLockSeatId().equals(seatId)) {
+                    continue;
+                }
+                if (cu.getLockStartTime() == null || cu.getLockEndTime() == null) {
+                    continue;
+                }
+                if (!cu.getLockStartTime().before(dayEnd) || !cu.getLockEndTime().after(dayStart)) {
+                    continue;
+                }
+                DayCardConsumptionBo add = new DayCardConsumptionBo();
+                add.setUserId(userId);
+                add.setSeatId(seatId);
+                add.setCardUserId(cu.getId());
+                add.setConsumptionDate(dayStart);
+                add.setStatus(1);
+                add.setCheckInTime(new Date());
+                Boolean ok = insertByBo(add);
+                if (Boolean.TRUE.equals(ok)) {
+                    log.info("[到店签到] 锁座卡补当天记录并签到: userId={} cardUserId={} seatId={}",
+                        userId, cu.getId(), seatId);
+                    return true;
+                }
+                log.warn("[到店签到] 锁座卡补记录未成功 userId={} cardUserId={}", userId, cu.getId());
+            }
+        } catch (Exception e) {
+            log.warn("[到店签到] 锁座卡补记录失败 userId={} seatId={}: {}", userId, seatId, e.getMessage());
         }
         return false;
     }
