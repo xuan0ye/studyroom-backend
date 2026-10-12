@@ -371,6 +371,15 @@ studyroom:
     # 今日早到榜的起算小时(默认 6 点): 页面文案承诺"今日 6 点后谁先到谁先开灯",
     # 而原实现只按日期过滤, 导致凌晨 1:20 开灯的人拿了早到榜第一。改这里即可调整门槛。
     early-start-hour: ${STUDYROOM_RANK_EARLY_HOUR:6}
+  # 签到口径(2026-10-12 定)
+  #   本来是"门禁刷脸到店", 但这台门禁机不上报通行记录:
+  #     · read_record 回 code:2(不支持), 也不走标准协议的 HTTP upRecord(那是 protocolVersion=1 的协议);
+  #     · 设备自己发的 open_door 事件里没有用户身份(user_acct/jobnumber), 认不出是谁。
+  #   → 到店刷脸签到在这台硬件上无法自动实现, 结果就是"排行榜全空、签到积分不发、时长卡不算已使用"。
+  #   故退回旧口径: 顾客到座位点「开灯」即签到(与早到榜文案"今日6点后谁先到谁先开灯"一致)。
+  #   将来换了会推送通行记录的门禁机, 把这里设成 false 即可切回刷脸口径。
+  checkin:
+    light-on-enabled: ${STUDYROOM_CHECKIN_LIGHT_ON_ENABLED:true}
   # 米家灵动开关桥接(座位灯控制)
   miot:
     # 桥接脚本路径(服务器部署时改为服务器上的路径, 如 /opt/studyroom/tools/miot_bridge.py)
