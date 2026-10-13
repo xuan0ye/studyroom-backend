@@ -345,14 +345,14 @@ public class DayCardConsumptionServiceImpl implements IDayCardConsumptionService
         if (seat == null) {
             throw new ServiceException("座位不存在");
         }
-        // 卡的区域限制: card_type 0=不限 / 1=仅沉浸区(16-19号) / 2=禁止沉浸区
+        // 卡的区域限制: card_type 0=两区通用 / 1=仅沉浸区(16-19号) / 2=仅经济区
         if (cardDef != null && cardDef.getCardType() != null && seat.getSeatArea() != null) {
             int areaLimit = cardDef.getCardType();
             if (areaLimit == 2 && seat.getSeatArea() == 1) {
-                throw new ServiceException("该卡不能预约沉浸区（16-19号）座位，请选择其它座位");
+                throw new ServiceException("该卡为「仅经济区」，不能预约沉浸区（16-19 号）座位，请换一个座位");
             }
             if (areaLimit == 1 && seat.getSeatArea() != 1) {
-                throw new ServiceException("该卡仅限预约沉浸区（16-19号）座位");
+                throw new ServiceException("该卡为「仅沉浸区」，只能预约 16-19 号座位");
             }
         }
         Date lockEnd = DateUtil.offsetDay(bookingDate, lockDays);

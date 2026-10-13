@@ -62,6 +62,12 @@ public class CardBo extends BaseEntity {
     @NotNull(message = "可用区域不能为空", groups = {AddGroup.class, EditGroup.class})
     private Integer usable;
 
+    /** 实际预约区域限制: 0=两区通用, 1=仅沉浸区, 2=仅经济区。 */
+    @ApiModelProperty(value = "预约区域: 0两区通用 1仅沉浸区 2仅经济区")
+    @Min(value = 0, message = "预约区域参数不正确", groups = {AddGroup.class, EditGroup.class})
+    @Max(value = 2, message = "预约区域参数不正确", groups = {AddGroup.class, EditGroup.class})
+    private Integer cardType;
+
     /**
      * 次数(天)
      */

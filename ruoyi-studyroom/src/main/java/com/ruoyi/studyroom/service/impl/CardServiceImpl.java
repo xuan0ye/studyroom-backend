@@ -2,6 +2,7 @@ package com.ruoyi.studyroom.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
 import com.ruoyi.common.utils.StringUtils;
+import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.core.domain.PageQuery;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -73,6 +74,7 @@ public class CardServiceImpl implements ICardService {
         lqw.eq(StringUtils.isNotBlank(bo.getCardTitle()), Card::getCardTitle, bo.getCardTitle());
         lqw.eq(bo.getPrice() != null, Card::getPrice, bo.getPrice());
         lqw.eq(bo.getUsable() != null, Card::getUsable, bo.getUsable());
+        lqw.eq(bo.getCardType() != null, Card::getCardType, bo.getCardType());
         lqw.eq(bo.getFrequency() != null, Card::getFrequency, bo.getFrequency());
         lqw.eq(bo.getTerm() != null, Card::getTerm, bo.getTerm());
         lqw.eq(bo.getStatus() != null, Card::getStatus, bo.getStatus());
@@ -91,6 +93,10 @@ public class CardServiceImpl implements ICardService {
     @Override
     public Boolean insertByBo(CardBo bo) {
         Card add = BeanUtil.toBean(bo, Card.class);
+        // 兼容只提交旧区域字段的客户端; 新后台始终明确提交 cardType。
+        if (add.getCardType() == null) {
+            add.setCardType(Integer.valueOf(1).equals(add.getUsable()) ? 1 : 2);
+        }
         validEntityBeforeSave(add);
         boolean flag = baseMapper.insert(add) > 0;
         if (flag) {
@@ -118,7 +124,15 @@ public class CardServiceImpl implements ICardService {
      * @param entity 实体类数据
      */
     private void validEntityBeforeSave(Card entity){
-        //TODO 做一些数据校验,如唯一约束
+        // 修改时省略 cardType 就保留原限制(MyBatis 不更新 null 字段)，避免上下架/排序重置区域。
+        Integer area = entity.getCardType();
+        if (area != null) {
+            if (area < 0 || area > 2) {
+                throw new ServiceException("预约区域参数不正确");
+            }
+            // usable 供旧版页面显示使用，实际预约始终按 cardType 校验。
+            entity.setUsable(area == 1 ? 1 : 0);
+        }
     }
 
     /**

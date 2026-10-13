@@ -56,8 +56,6 @@ public class CardVo {
     /**
      * 可用区域
      */
-    @ExcelProperty(value = "可用区域", converter = ExcelDictConvert.class)
-    @ExcelDictFormat(dictType = "area_status")
     @ApiModelProperty("可用区域")
     private Integer usable;
 
@@ -86,6 +84,8 @@ public class CardVo {
     /**
      * 区域限制: 0=不限区域 1=仅沉浸区(16-19号) 2=禁止沉浸区(16-19号)
      */
+    @ExcelProperty(value = "可用区域", converter = ExcelDictConvert.class)
+    @ExcelDictFormat(readConverterExp = "0=两区通用,1=仅沉浸区,2=仅经济区")
     @ApiModelProperty("区域限制")
     private Integer cardType;
 
